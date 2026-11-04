@@ -5,6 +5,7 @@
 
 # Datos (se regeneran con `daytrader ingest`)
 /data/
+reports/*.log
 *.duckdb
 *.duckdb.wal
 

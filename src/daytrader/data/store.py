@@ -120,9 +120,7 @@ class Store:
         return {(r[0], r[1]) for r in rows}
 
     def query(self, sql: str, params: list | None = None) -> pl.DataFrame:
-        out = pl.from_arrow(self.con.execute(sql, params or []).to_arrow_table())
-        assert isinstance(out, pl.DataFrame)
-        return out
+        return self.con.sql(sql, params=params or None).pl()
 
     def close(self) -> None:
         self.con.close()

@@ -19,6 +19,11 @@ Sistema de trading intradía para acciones de EE. UU. Investigación y paper tra
 - Barra diaria de la sesión D: `available_at = D 20:00 ET` (fin del post-market, conservador).
 - Precios almacenados **raw** (sin ajustar). Splits en la tabla `splits`.
 - Feed: SIP. `session` ∈ {pre, rth, post, closed}; `session_date` = fecha ET.
+- Barra diaria de Alpaca (verificado en fase 1 sobre 25.100 días): OHLC = solo horario regular
+  (open/close ≈ subastas oficiales), pero **volume incluye extended hours**. Para volumen relativo
+  intradía, usar sumas de barras de 1 min filtradas por `session`, no el volumen diario.
+- Splits en el periodo: LCID 1:10 (2025-09-02), NFLX 10:1 (2025-11-17), CVNA 5:1 (2026-05-08).
+  Cualquier cálculo multi-día (ATR, gaps, medias) debe ajustar por splits.
 
 ## Stack
 Python 3.12 + uv · alpaca-py · polars/pandas · DuckDB (`data/market.duckdb`) · pytest · Streamlit (fase 6).
