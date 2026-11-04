@@ -1,0 +1,48 @@
+[project]
+name = "daytrader"
+version = "0.1.0"
+description = "Sistema de day trading asistido para acciones de EE. UU. (solo paper trading)"
+readme = "README.md"
+authors = [
+    { name = "juan fernando graciano", email = "graciano90210@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "alpaca-py>=0.44.0",
+    "duckdb>=2.0.0",
+    "exchange-calendars>=4.13.2",
+    "pandas>=3.1.1",
+    "polars>=2.1.0",
+    "pyarrow>=26.0.1",
+    "pydantic-settings>=2.16.2",
+    "pyyaml>=6.0.3",
+    "rich>=15.0.0",
+    "typer>=0.27.3",
+]
+
+[project.scripts]
+daytrader = "daytrader:main"
+
+[build-system]
+requires = ["uv_build>=0.10.11,<0.11.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "hypothesis>=6.170.14",
+    "pytest>=9.2.0",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.17.3",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E501"]  # el formatter controla el largo; SQL/strings largos se permiten

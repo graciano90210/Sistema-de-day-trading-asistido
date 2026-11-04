@@ -1,0 +1,11 @@
+database_path: data/market.duckdb
+reports_dir: reports
+duckdb_memory_limit: 1GB   # la máquina tiene 7.5 GB; mantener la ingesta acotada
+
+data:
+  feed: sip                 # sip (consolidado) — iex solo tiene ~2-3% del volumen
+  adjustment: raw           # precios reales; splits en tabla aparte
+  history_start: "2024-11-01"
+  history_end: null         # null = última sesión completa antes de hoy (ET)
+  max_requests_per_minute: 180   # límite Alpaca: 200/min
+  max_retries: 5

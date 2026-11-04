@@ -1,0 +1,60 @@
+# Universo de barras de 1 minuto (fase 1).
+# ADVERTENCIA (sesgo de supervivencia): esta lista se eligió en 2026 con información
+# de hoy (nombres que siguen siendo líquidos). Los resultados de backtest sobre ella
+# están sesgados al alza. En la fase 2 el scanner usará barras diarias de todo el
+# universo de acciones comunes de EE. UU. para mitigarlo.
+benchmarks:
+  - SPY
+  - QQQ
+  - IWM
+
+large_caps:
+  - AAPL
+  - MSFT
+  - NVDA
+  - AMZN
+  - META
+  - GOOGL
+  - TSLA
+  - AMD
+  - AVGO
+  - NFLX
+  - ORCL
+  - CRM
+  - ADBE
+  - INTC
+  - MU
+  - QCOM
+  - JPM
+  - BAC
+  - XOM
+  - UNH
+  - LLY
+  - COST
+  - WMT
+
+high_beta:
+  - PLTR
+  - COIN
+  - MARA
+  - RIOT
+  - SOFI
+  - HOOD
+  - RIVN
+  - NIO
+  - LCID
+  - SNAP
+  - UBER
+  - SHOP
+  - SMCI
+  - ARM
+  - MSTR
+  - DKNG
+  - ROKU
+  - AFRM
+  - UPST
+  - CVNA
+  - BA
+  - PYPL
+  - F
+  - AAL
