@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import polars as pl
 from alpaca.data.enums import Adjustment, DataFeed
@@ -57,8 +57,9 @@ def with_retries(fn: Callable[[], object], max_retries: int, base_wait: float = 
         try:
             return fn()
         except Exception as exc:  # red, 429 persistente, 5xx
-            if attempt == max_retries:
-                raise
+            status = getattr(exc, "status_code", None) or getattr(getattr(exc, "response", None), "status_code", None)
+            if attempt == max_retries or (status is not None and 400 <= status < 500 and status != 429):
+                raise  # errores de cliente (p. ej. símbolo inválido) no mejoran reintentando
             wait = base_wait * 2**attempt
             log.warning("Reintento %d/%d en %.0fs: %s", attempt + 1, max_retries, wait, exc)
             time.sleep(wait)
@@ -116,21 +117,133 @@ def make_bar_fetcher(
     return fetch
 
 
-def fetch_splits(api_key: str, secret_key: str, symbols: list[str], start: date, end: date) -> pl.DataFrame:
-    client = CorporateActionsClient(api_key, secret_key, raw_data=True)
-    req = CorporateActionsRequest(symbols=symbols, types=["forward_split", "reverse_split"], start=start, end=end)
-    raw = with_retries(lambda: client.get_corporate_actions(req), 3) or {}
+# fetch_many(symbols, timeframe, start_utc, end_utc) -> DataFrame con RAW_SCHEMA para todos los símbolos
+MultiFetcher = Callable[[list[str], str, datetime, datetime], pl.DataFrame]
+
+
+def make_multi_fetcher(
+    api_key: str,
+    secret_key: str,
+    feed: str = "sip",
+    adjustment: str = "raw",
+    max_requests_per_minute: int = 180,
+    max_retries: int = 5,
+) -> MultiFetcher:
+    """Igual que make_bar_fetcher pero con varios símbolos por request (Alpaca pagina internamente)."""
+    client = StockHistoricalDataClient(api_key, secret_key, raw_data=True)
+    limiter = RateLimiter(max_requests_per_minute)
+
+    def fetch_many(symbols: list[str], timeframe: str, start_utc: datetime, end_utc: datetime) -> pl.DataFrame:
+        req = StockBarsRequest(
+            symbol_or_symbols=list(symbols),
+            timeframe=_TIMEFRAMES[timeframe],
+            start=start_utc.replace(tzinfo=UTC),
+            end=end_utc.replace(tzinfo=UTC),
+            feed=DataFeed(feed),
+            adjustment=Adjustment(adjustment),
+        )
+
+        def call():
+            limiter.wait()
+            return client.get_stock_bars(req)
+
+        raw = with_retries(call, max_retries) or {}
+        frames = [raw_bars_to_frame(sym, bars) for sym, bars in raw.items() if bars]
+        return pl.concat(frames) if frames else pl.DataFrame(schema=RAW_SCHEMA)
+
+    return fetch_many
+
+
+def fetch_assets(api_key: str, secret_key: str) -> pl.DataFrame:
+    """Lista de acciones de EE. UU. (activas e inactivas). Endpoint de solo lectura de la cuenta paper."""
+    import requests
+
+    from daytrader.config import PAPER_TRADING_URL, assert_paper_url
+
+    base = assert_paper_url(PAPER_TRADING_URL)
+    headers = {"APCA-API-KEY-ID": api_key, "APCA-API-SECRET-KEY": secret_key}
     rows = []
-    for key, kind in (("forward_splits", "forward"), ("reverse_splits", "reverse")):
-        for item in raw.get(key, []) or []:
-            rows.append(
-                {
-                    "symbol": item["symbol"],
-                    "ex_date": date.fromisoformat(item["ex_date"]),
-                    "old_rate": float(item["old_rate"]),
-                    "new_rate": float(item["new_rate"]),
-                    "kind": kind,
-                }
-            )
+    for status in ("active", "inactive"):
+        r = with_retries(
+            lambda status=status: requests.get(
+                f"{base}/v2/assets", params={"status": status, "asset_class": "us_equity"}, headers=headers, timeout=120
+            ),
+            3,
+        )
+        r.raise_for_status()
+        rows += [
+            {"symbol": a["symbol"], "name": a.get("name") or "", "exchange": a["exchange"], "status": a["status"]}
+            for a in r.json()
+        ]
+    return pl.DataFrame(rows).unique(subset=["symbol"], keep="first")  # 'active' gana si hay duplicado
+
+
+def fetch_news(api_key: str, secret_key: str, symbols: list[str], start_utc: datetime, end_utc: datetime) -> list[dict]:
+    """Noticias (Benzinga vía Alpaca) para `symbols` en [start, end], todas las páginas."""
+    import requests
+
+    headers = {"APCA-API-KEY-ID": api_key, "APCA-API-SECRET-KEY": secret_key}
+    params = {
+        "symbols": ",".join(symbols),
+        "start": start_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "end": end_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "limit": 50,
+        "sort": "asc",
+        "include_content": "false",
+    }
+    out: list[dict] = []
+    while True:
+        r = with_retries(
+            lambda p=dict(params): requests.get(
+                "https://data.alpaca.markets/v1beta1/news", params=p, headers=headers, timeout=60
+            ),
+            3,
+        )
+        r.raise_for_status()
+        body = r.json()
+        out += body.get("news", [])
+        token = body.get("next_page_token")
+        if not token:
+            return out
+        params["page_token"] = token
+
+
+def fetch_splits(api_key: str, secret_key: str, symbols: list[str] | None, start: date, end: date) -> pl.DataFrame:
+    """Splits en [start, end]. `symbols=None` = todo el mercado.
+
+    Se consulta en ventanas de 30 días y se subdivide si una ventana llega al tope de 1.000
+    resultados (señal de truncado).
+    """
+    client = CorporateActionsClient(api_key, secret_key, raw_data=True)
+    cap = 1000
+
+    def window(a: date, b: date) -> list[tuple[str, dict]]:
+        req = CorporateActionsRequest(symbols=symbols, types=["forward_split", "reverse_split"], start=a, end=b)
+        raw = with_retries(lambda: client.get_corporate_actions(req), 3) or {}
+        items = [(k, it) for k in ("forward_splits", "reverse_splits") for it in (raw.get(k) or [])]
+        if len(items) >= cap and b > a:
+            mid = a + (b - a) / 2
+            return window(a, mid) + window(mid + timedelta(days=1), b)
+        if len(items) >= cap:
+            raise RuntimeError(f"Splits truncados en {a}: {len(items)} resultados en un solo día")
+        return items
+
+    items: list[tuple[str, dict]] = []
+    cur = start
+    while cur <= end:
+        nxt = min(cur + timedelta(days=29), end)
+        items += window(cur, nxt)
+        cur = nxt + timedelta(days=1)
+    rows = []
+    for key, item in items:
+        rows.append(
+            {
+                "symbol": item["symbol"],
+                "ex_date": date.fromisoformat(item["ex_date"]),
+                "old_rate": float(item["old_rate"]),
+                "new_rate": float(item["new_rate"]),
+                "kind": "forward" if key == "forward_splits" else "reverse",
+            }
+        )
     schema = {"symbol": pl.Utf8, "ex_date": pl.Date, "old_rate": pl.Float64, "new_rate": pl.Float64, "kind": pl.Utf8}
-    return pl.DataFrame(rows, schema=schema)
+    return pl.DataFrame(rows, schema=schema).unique(subset=["symbol", "ex_date"], keep="last")

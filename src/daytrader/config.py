@@ -34,6 +34,12 @@ class Secrets(BaseSettings):
 
     alpaca_api_key: SecretStr | None = None
     alpaca_secret_key: SecretStr | None = None
+    sec_user_agent: str | None = None
+
+    def require_sec_user_agent(self) -> str:
+        if not self.sec_user_agent or "@" not in self.sec_user_agent:
+            raise RuntimeError('Falta SEC_USER_AGENT en .env (formato: "NombreApp tu@email.com").')
+        return self.sec_user_agent
 
     def require_alpaca(self) -> tuple[str, str]:
         if not self.alpaca_api_key or not self.alpaca_secret_key:
@@ -74,6 +80,10 @@ def load_config(path: Path | None = None) -> AppConfig:
     path = path or CONFIG_DIR / "settings.yaml"
     raw = yaml.safe_load(path.read_text()) or {}
     return AppConfig.model_validate(raw)
+
+
+def load_yaml(name: str) -> dict:
+    return yaml.safe_load((CONFIG_DIR / name).read_text()) or {}
 
 
 def load_universe(path: Path | None = None) -> list[str]:

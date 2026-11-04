@@ -51,6 +51,17 @@ def test_no_trading_client_outside_executor():
     assert not hits, hits
 
 
+def test_order_endpoints_only_in_executor():
+    """Endpoints que mueven dinero (órdenes/posiciones) solo en el paper-executor (fase 5)."""
+    pattern = re.compile(r"/v2/(orders|positions)")
+    hits = [
+        str(p.relative_to(ROOT))
+        for p in (ROOT / "src").rglob("*.py")
+        if pattern.search(p.read_text()) and not str(p.relative_to(ROOT)).startswith("src/daytrader/execution")
+    ]
+    assert not hits, hits
+
+
 def test_no_hardcoded_keys():
     key_pattern = re.compile(r"\b(PK|AK|CK)[A-Z0-9]{16,}\b")
     hits = [str(p.relative_to(ROOT)) for p in _code_files() if key_pattern.search(p.read_text(errors="ignore"))]

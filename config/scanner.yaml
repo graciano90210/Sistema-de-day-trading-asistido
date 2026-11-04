@@ -1,0 +1,29 @@
+# Parámetros del scanner (fase 2). Todo se evalúa point-in-time a la hora `cutoff_et`.
+
+cutoff_et: "09:25"          # hora ET del scan de pre-market (barras con available_at <= cutoff)
+premarket_start_et: "04:00"
+
+# Etapa 1 — universo líquido, calculado con barras diarias de sesiones ANTERIORES (ajustadas por split)
+universe:
+  exchanges: [NYSE, NASDAQ, AMEX, ARCA, BATS]
+  include_inactive: true     # incluye acciones que dejaron de cotizar (mitiga sesgo de supervivencia)
+  min_price: 5.0             # cierre anterior
+  max_price: 1000.0
+  min_adv_usd: 20_000_000    # media 20 sesiones de close*volume
+  min_atr: 0.50              # ATR(14), media simple del true range
+  min_atr_pct: 0.02          # ATR / cierre
+  min_history: 20            # sesiones mínimas de historia
+  lookback_sessions: 20
+
+# Etapa 2 — gappers de pre-market
+gappers:
+  min_abs_gap: 0.03          # |último pre-market / cierre anterior - 1|
+  min_premarket_volume: 100_000
+  min_rvol: 2.0              # volumen pre-market hasta cutoff / media de las N sesiones previas a la misma hora
+  rvol_lookback: 20
+  max_shares_outstanding: null   # p. ej. 50_000_000 para "low float"; null = sin filtro
+  top_n: 15                  # tamaño de la watchlist (ranking por |gap| × $ pre-market)
+
+catalysts:
+  news_from: previous_close  # noticias desde el cierre (16:00 ET) de la sesión anterior hasta cutoff
+  max_symbols_for_relevance: 3

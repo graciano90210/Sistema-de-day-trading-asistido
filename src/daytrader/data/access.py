@@ -21,19 +21,25 @@ def _as_list(symbols: str | list[str]) -> list[str]:
 
 def get_bars(
     store: Store,
-    symbols: str | list[str],
+    symbols: str | list[str] | None,
     as_of: datetime,
     start: datetime | None = None,
     timeframe: str = "1m",
     sessions: tuple[str, ...] | None = None,
 ) -> pl.DataFrame:
-    """Barras conocibles en `as_of` (naive UTC), opcionalmente desde `start` (por ts_utc)."""
+    """Barras conocibles en `as_of` (naive UTC), opcionalmente desde `start` (por ts_utc).
+
+    `symbols=None` devuelve todos los símbolos (útil para el universo completo de barras diarias).
+    """
     if as_of.tzinfo is not None:
         raise ValueError("as_of debe ser datetime naive en UTC")
     table = TABLES[timeframe]
-    syms = _as_list(symbols)
-    sql = f"SELECT * FROM {table} WHERE symbol IN ({','.join('?' * len(syms))}) AND available_at <= ?"
-    params: list = [*syms, as_of]
+    sql = f"SELECT * FROM {table} WHERE available_at <= ?"
+    params: list = [as_of]
+    if symbols is not None:
+        syms = _as_list(symbols)
+        sql += f" AND symbol IN ({','.join('?' * len(syms))})"
+        params.extend(syms)
     if start is not None:
         sql += " AND ts_utc >= ?"
         params.append(start)

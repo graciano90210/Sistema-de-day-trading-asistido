@@ -44,6 +44,44 @@ CREATE TABLE IF NOT EXISTS splits (
     old_rate DOUBLE, new_rate DOUBLE, kind VARCHAR,
     PRIMARY KEY (symbol, ex_date)
 );
+CREATE TABLE IF NOT EXISTS assets (
+    symbol VARCHAR NOT NULL, name VARCHAR, exchange VARCHAR, status VARCHAR,
+    is_common BOOLEAN, fetched_at TIMESTAMP,
+    PRIMARY KEY (symbol)
+);
+-- Resumen del pre-market de un símbolo en una sesión, usando SOLO barras con available_at <= cutoff_utc.
+CREATE TABLE IF NOT EXISTS premarket_snap (
+    symbol VARCHAR NOT NULL, session_date DATE NOT NULL, cutoff_utc TIMESTAMP NOT NULL,
+    last DOUBLE, high DOUBLE, low DOUBLE, volume DOUBLE, dollar_volume DOUBLE,
+    n_bars BIGINT, last_bar_ts TIMESTAMP,
+    PRIMARY KEY (symbol, session_date, cutoff_utc)
+);
+CREATE TABLE IF NOT EXISTS news (
+    id BIGINT NOT NULL, created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP,
+    headline VARCHAR, summary VARCHAR, source VARCHAR, url VARCHAR, n_symbols INTEGER,
+    PRIMARY KEY (id)
+);
+CREATE TABLE IF NOT EXISTS news_symbols (
+    id BIGINT NOT NULL, symbol VARCHAR NOT NULL,
+    PRIMARY KEY (id, symbol)
+);
+-- Rangos ya consultados de noticias (caché): símbolo × [start, end] UTC.
+CREATE TABLE IF NOT EXISTS news_log (
+    symbol VARCHAR NOT NULL, start_utc TIMESTAMP NOT NULL, end_utc TIMESTAMP NOT NULL,
+    PRIMARY KEY (symbol, start_utc, end_utc)
+);
+CREATE TABLE IF NOT EXISTS sec_tickers (
+    symbol VARCHAR NOT NULL, cik BIGINT NOT NULL, title VARCHAR,
+    PRIMARY KEY (symbol)
+);
+-- dei:EntityCommonStockSharesOutstanding; visible desde `filed` (fecha de publicación en EDGAR).
+CREATE TABLE IF NOT EXISTS shares_outstanding (
+    cik BIGINT NOT NULL, tag VARCHAR NOT NULL, priority INTEGER NOT NULL,
+    end_date DATE NOT NULL, filed DATE NOT NULL, accn VARCHAR NOT NULL,
+    shares DOUBLE, form VARCHAR,
+    PRIMARY KEY (cik, tag, end_date, filed, accn, shares)
+);
+CREATE TABLE IF NOT EXISTS sec_fetch_log (cik BIGINT PRIMARY KEY, fetched_at TIMESTAMP, status VARCHAR);
 CREATE TABLE IF NOT EXISTS ingest_log (
     symbol VARCHAR NOT NULL, timeframe VARCHAR NOT NULL,
     chunk_start DATE NOT NULL, chunk_end DATE NOT NULL,   -- [start, end)
@@ -79,6 +117,17 @@ class Store:
         batch = df.select(BAR_COLUMNS).unique(subset=["symbol", "ts_utc"], keep="last")  # noqa: F841
         self.con.execute(f"INSERT OR REPLACE INTO {table} BY NAME SELECT * FROM batch")
         return batch.height
+
+    def upsert(self, table: str, df: pl.DataFrame) -> int:
+        """INSERT OR REPLACE genérico por nombre de columna."""
+        if df.is_empty():
+            return 0
+        self.con.register("_upsert_df", df)
+        try:
+            self.con.execute(f"INSERT OR REPLACE INTO {table} BY NAME SELECT * FROM _upsert_df")
+        finally:
+            self.con.unregister("_upsert_df")
+        return df.height
 
     def upsert_splits(self, df: pl.DataFrame) -> int:
         if df.is_empty():
