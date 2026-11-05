@@ -89,6 +89,7 @@ def build_universe(hist: Store, n: int = 100) -> pl.DataFrame:
     daily = hist.query("SELECT symbol, session_date, close, volume FROM bars_1d")
     parts = [pit_universe(daily, common, y, n) for y in range(FIRST_YEAR, LAST_YEAR + 1)]
     u = pl.concat(parts)
+    hist.con.execute("DELETE FROM universe_pit")  # se recalcula completo (por si las diarias estaban incompletas)
     hist.upsert("universe_pit", u)
     return u
 
