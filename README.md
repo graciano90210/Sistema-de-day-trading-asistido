@@ -17,6 +17,8 @@ datos SIP de 1 minuto, cero lookahead verificado con tests, costos realistas y v
 | 5 | Risk-manager + paper-executor (y/n) + journal | ✅ |
 | 6 | Dashboard Streamlit (`daytrader dashboard`) | ✅ |
 
+> 📘 **Manual completo de instrucciones: [docs/MANUAL.md](docs/MANUAL.md)**
+
 ## Puesta en marcha
 ```bash
 uv sync
