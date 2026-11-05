@@ -15,7 +15,7 @@ datos SIP de 1 minuto, cero lookahead verificado con tests, costos realistas y v
 | 3 | Strategies + backtester + 3 rondas pre-registradas (25 intentos) | ✅ — sin edge intradía |
 | 4 | Validación: walk-forward, DSR, costos calibrados; OOS 2026 sellado (nada que validar) | ✅ |
 | 5 | Risk-manager + paper-executor (y/n) + journal | ✅ |
-| 6 | Dashboard Streamlit | ⏳ |
+| 6 | Dashboard Streamlit (`daytrader dashboard`) | ✅ |
 
 ## Puesta en marcha
 ```bash

@@ -389,6 +389,12 @@ def round3() -> None:
             prev = trial_sharpes_round1(store, bt, r1)
             r2 = run_round2(store, bt, strat, scfg, load_universe(), spy_long, 0.695, None, d0, d1)
             prev += [daily_sharpe(r["_eq"]) for r in r2["rows"]]
+    out_dir = ROOT / "data" / "backtests"
+    for r in r2["rows"]:  # persistir trades de las rondas 2 y 3 para el dashboard
+        if not r["_trades"].is_empty():
+            r["_trades"].write_parquet(out_dir / f"r2_{r['config']}.parquet")
+    if not res["wf"]["_trades"].is_empty():
+        res["wf"]["_trades"].write_parquet(out_dir / "r3_walk_forward.parquet")
     sharpes = prev + [daily_sharpe(g["_eq"]) for g in res["grid"]]
     wf = res["wf"]
     wf["dsr"] = deflated_sharpe(wf["_eq"]["ret"].fill_null(0.0).to_numpy(), sharpes)
@@ -672,6 +678,19 @@ def note(
     j.note(fingerprint, text, "error" if error else "nota")
     console.print("Nota guardada.")
     j.close()
+
+
+@app.command()
+def dashboard(port: Annotated[int, typer.Option(help="Puerto local")] = 8501) -> None:
+    """Abre el dashboard (Streamlit) en el navegador: operativa paper e investigación."""
+    import subprocess
+    import sys
+
+    from daytrader.config import ROOT
+
+    app_path = ROOT / "src" / "daytrader" / "dashboard" / "app.py"
+    subprocess.run([sys.executable, "-m", "streamlit", "run", str(app_path), "--server.port", str(port),
+                    "--browser.gatherUsageStats", "false"], check=False)  # fmt: skip
 
 
 if __name__ == "__main__":
