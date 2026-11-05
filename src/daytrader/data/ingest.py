@@ -96,3 +96,57 @@ def ingest(
             if on_chunk:
                 on_chunk(symbol, c_start, c_end, n)
     return summary
+
+
+def ingest_parallel(
+    store: Store,
+    fetchers: list[Fetcher],
+    symbols: list[str],
+    start: date,
+    end: date,
+    timeframe: str,
+    feed: str,
+    on_chunk: Callable[[str, date, date, int], None] | None = None,
+) -> IngestSummary:
+    """Como `ingest`, pero descarga con un hilo por fetcher (cada uno con su cliente y su limitador).
+    Solo el hilo principal escribe en DuckDB (un único escritor). Reanudable igual que `ingest`."""
+    import threading
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    summary = IngestSummary()
+    chunks = month_chunks(start, end) if timeframe == "1m" else [(start, end)]
+    tasks = []
+    for symbol in symbols:
+        done = store.completed_chunks(symbol, timeframe)
+        for c0, c1 in chunks:
+            if (c0, c1) in done:
+                summary.chunks_skipped += 1
+            else:
+                tasks.append((symbol, c0, c1))
+    local, pool_lock, free = threading.local(), threading.Lock(), list(fetchers)
+
+    def work(symbol, c0, c1):
+        if not hasattr(local, "fetch"):
+            with pool_lock:
+                local.fetch = free.pop()
+        return local.fetch(symbol, timeframe, et_to_utc_naive(c0, time(0)), et_to_utc_naive(c1, time(0)))
+
+    with ThreadPoolExecutor(max_workers=len(fetchers)) as ex:
+        futs = {ex.submit(work, *t): t for t in tasks}
+        for fut in as_completed(futs):
+            symbol, c0, c1 = futs.pop(fut)
+            n = 0
+            try:
+                df = prepare_bars(fut.result(), timeframe, feed)
+                df = df.filter(pl.col("session_date").is_between(c0, c1 - timedelta(days=1)))
+                n = store.upsert_bars(df, timeframe)
+                store.log_chunk(symbol, timeframe, c0, c1, n, "ok")
+                summary.chunks_done += 1
+                summary.rows += n
+            except Exception as exc:
+                log.error("Error %s %s %s: %s", symbol, timeframe, c0, exc)
+                store.log_chunk(symbol, timeframe, c0, c1, 0, "error", str(exc)[:500])
+                summary.errors.append((symbol, c0, str(exc)[:200]))
+            if on_chunk:
+                on_chunk(symbol, c0, c1, n)
+    return summary

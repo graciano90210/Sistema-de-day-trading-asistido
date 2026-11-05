@@ -769,8 +769,11 @@ def historia(
             u = H.build_universe(hist, top)
             say(f"universo point-in-time: {u.height} filas, {u['symbol'].n_unique()} símbolos distintos")
         if "minutos" in pasos:
-            fetch = make_bar_fetcher(key, secret, cfg.data.feed, cfg.data.adjustment,
-                                     cfg.data.max_requests_per_minute, cfg.data.max_retries)  # fmt: skip
+            from daytrader.data.ingest import ingest_parallel
+
+            # 6 hilos × 15 llamadas/min = 90 llamadas/min (cada una ~2 páginas) < límite de 200/min de Alpaca
+            fetchers = [make_bar_fetcher(key, secret, cfg.data.feed, cfg.data.adjustment, 15, cfg.data.max_retries)
+                        for _ in range(6)]  # fmt: skip
             for y in range(H.FIRST_YEAR, H.LAST_YEAR + 1):
                 syms = H.universe_for(hist, y)
                 n_done = [0]
@@ -780,7 +783,8 @@ def historia(
                     if n_done[0] % 120 == 0:
                         say(f"1m {y}: {n_done[0]}/{len(syms) * 12} bloques (último {sym} {c0:%Y-%m})")
 
-                s = run_ingest(hist, fetch, syms, _d(y, 1, 1), _d(y + 1, 1, 1), "1m", cfg.data.feed, on_chunk=on_chunk)
+                s = ingest_parallel(hist, fetchers, syms, _d(y, 1, 1), _d(y + 1, 1, 1), "1m", cfg.data.feed,
+                                    on_chunk=on_chunk)  # fmt: skip
                 say(
                     f"1m {y}: {s.chunks_done} nuevos, {s.chunks_skipped} en caché, {s.rows:,} filas, {len(s.errors)} errores"
                 )
