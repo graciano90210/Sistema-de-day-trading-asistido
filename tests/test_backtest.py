@@ -139,3 +139,84 @@ def test_equity_stats_drawdown_and_sharpe():
     assert s["max_drawdown"] == pytest.approx(98 / 102 - 1)
     r = eq["ret"].to_numpy()
     assert s["sharpe"] == pytest.approx(r.mean() / r.std(ddof=1) * np.sqrt(252))
+
+
+# ---------------- Órdenes stop de entrada (ronda 2) ----------------
+def stop_sig(side=1, level=101.0, offset=0.5):
+    return Signal("AAA", D, "t", side, T0, T0 + timedelta(minutes=1), level, level - side * offset, None,
+                  entry_type="stop", entry_level=level, stop_offset=offset, valid_until=EOD)  # fmt: skip
+
+
+def test_stop_entry_fills_at_level_and_stop_from_fill():
+    b = bars([FLAT, FLAT, (100.5, 101.6, 100.8, 101.5), (101.5, 102, 101.2, 101.8)] + [FLAT] * 2)
+    t = simulate(stop_sig(), b, FREE, EOD, 100)
+    assert t.entry_ts == T0 + timedelta(minutes=2) and t.entry_px == 101.0 and t.stop == 100.5
+    assert not t.ambiguous
+
+
+def test_stop_entry_gap_through_level_fills_at_open():
+    b = bars([FLAT, FLAT, (102.0, 102.5, 101.8, 102.2)] + [FLAT] * 2)
+    t = simulate(stop_sig(), b, FREE, EOD, 100)
+    assert t.entry_px == 102.0 and t.stop == 101.5
+
+
+def test_stop_entry_not_triggered_returns_none():
+    assert simulate(stop_sig(level=150.0), bars([FLAT] * 5), FREE, EOD, 100) is None
+
+
+def test_entry_bar_ambiguity_conservative_vs_optimistic():
+    # La barra de entrada toca el nivel (101) y también el stop (100.5) pero cierra en 100.9: orden incierto.
+    b = bars([FLAT, (100.6, 101.2, 100.4, 100.9), (100.9, 103, 100.8, 102.5)] + [(102.5, 102.6, 102.4, 102.5)] * 3)
+    t = simulate(stop_sig(), b, FREE, T0 + timedelta(minutes=5), 100)
+    assert t.ambiguous and t.exit_reason == "stop" and t.r_net == pytest.approx(-1.0)
+    assert t.r_net_opt == pytest.approx((102.5 - 101.0) / 0.5)
+
+
+def test_entry_bar_closing_beyond_stop_is_not_ambiguous():
+    b = bars([FLAT, (100.6, 101.2, 100.2, 100.3)] + [FLAT] * 3)
+    t = simulate(stop_sig(), b, FREE, EOD, 100)
+    assert t.exit_reason == "stop" and not t.ambiguous and t.r_net_opt == t.r_net
+
+
+def test_stop_entry_respects_valid_until():
+    s = stop_sig()
+    s = Signal(**{**s.__dict__, "valid_until": T0 + timedelta(minutes=2)})
+    b = bars([FLAT, FLAT, (100.5, 101.6, 100.8, 101.5)] + [FLAT] * 2)
+    assert simulate(s, b, FREE, EOD, 100) is None
+
+
+def test_deflated_sharpe_penalizes_many_trials():
+    from daytrader.backtest.metrics import deflated_sharpe
+
+    rng = np.random.default_rng(1)
+    r = rng.normal(0.001, 0.01, 250)  # SR diario ~0.1
+    few = deflated_sharpe(r, [0.0, 0.02])
+    many = deflated_sharpe(r, list(rng.normal(0, 0.08, 50)))
+    assert 0 <= many < few <= 1
+    assert deflated_sharpe(np.zeros(10), [0.1, 0.2]) != deflated_sharpe(np.zeros(10), [0.1, 0.2])  # nan
+
+
+def test_hmm_regime_is_point_in_time():
+    from datetime import date as dt
+    from datetime import timedelta as td
+
+    from daytrader.research.regime import predicted_vol_prob
+
+    rng = np.random.default_rng(0)
+    n = 600
+    days = [dt(2020, 1, 1) + td(days=i) for i in range(n)]
+    vol = np.where((np.arange(n) // 60) % 2 == 0, 0.005, 0.03)
+    close = 100 * np.exp(np.cumsum(rng.normal(0, vol)))
+    spy = pl.DataFrame({"session_date": days, "close": close, "high": close * (1 + vol), "low": close * (1 - vol)})
+    ev = days[400:430]
+    a = predicted_vol_prob(spy, ev)
+    # Alterar datos DESPUÉS de una fecha no cambia las probabilidades de fechas <= esa fecha
+    cut = ev[10]
+    spy2 = spy.with_columns(
+        pl.when(pl.col("session_date") >= cut).then(pl.col("close") * 3).otherwise(pl.col("close")).alias("close")
+    )
+    b = predicted_vol_prob(spy2, ev)
+    ja = a.filter(pl.col("session_date") <= cut)["p_vol"].to_list()
+    jb = b.filter(pl.col("session_date") <= cut)["p_vol"].to_list()
+    assert np.allclose(ja, jb)
+    assert a["p_vol"].is_between(0, 1).all()

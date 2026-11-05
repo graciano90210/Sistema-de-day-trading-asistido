@@ -102,3 +102,29 @@ def test_no_entries_in_last_15_minutes_on_half_day():
     c = DayContext("AAA", D, 100.0, 0.05, 2.0, OPEN, half_close)
     closes = [100] * 5 + [100] * 200 + [105] * 10  # ruptura a las 13:05 ET (> cierre - 15 min)
     assert orb(make_bars(closes, spread=0.0), c, ORB5) == []
+
+
+from daytrader.strategies.orb_stop import orb_stop  # noqa: E402
+
+ORBSTOP = {"or_minutes": 5, "stop_atr": 0.10, "min_or_bars": 3, "last_entry_et": "15:45"}
+
+
+@pytest.mark.parametrize("seed", range(25))
+def test_orb_stop_prefix_invariance(seed):
+    bars = random_day(seed)
+    full = orb_stop(bars, ctx(), ORBSTOP)
+    for s in full:
+        assert s.decided_at == OPEN + timedelta(minutes=5)
+        assert s in orb_stop(bars.filter(pl.col("available_at") <= s.decided_at), ctx(), ORBSTOP)
+    assert orb_stop(bars.filter(pl.col("available_at") <= OPEN + timedelta(minutes=4)), ctx(), ORBSTOP) == []
+
+
+def test_orb_stop_direction_and_levels():
+    up = make_bars([100, 100.4, 100.8, 101.0, 101.2] + [101] * 10, spread=0.0)
+    s = orb_stop(up, ctx(atr=3.0), ORBSTOP)[0]
+    assert s.side == 1 and s.entry_level == float(up.head(5)["high"].max()) and s.stop_offset == pytest.approx(0.3)
+    down = make_bars([100, 99.6, 99.2, 99.0, 98.8] + [99] * 10, spread=0.0)
+    assert orb_stop(down, ctx(), ORBSTOP)[0].side == -1
+    doji = make_bars([100, 100.5, 99.5, 100.2, 100.0] + [100] * 10, spread=0.0)
+    doji = doji.with_columns(pl.when(pl.col("ts_utc") == OPEN).then(100.0).otherwise(pl.col("open")).alias("open"))
+    assert orb_stop(doji, ctx(), ORBSTOP) == []

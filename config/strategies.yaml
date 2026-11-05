@@ -35,3 +35,33 @@ vwap_rev:
   last_entry_et: "15:00"
   direction: both
   max_trades_per_symbol: 1
+
+# ---------------------------------------------------------------------------
+# Ronda 2 — pre-registrada en docs/preregistro_ronda2.md (commit 71bff15). NO modificar.
+# ---------------------------------------------------------------------------
+h1_orb_sip:                   # H1: universo = stocks in play (top 20 RVOL) — ver runner
+  type: orb_stop
+  or_minutes: 5
+  stop_atr: 0.10
+  min_or_bars: 3
+  last_entry_et: "15:45"
+
+h2_orb_stop_gappers:          # H2: misma mecánica sobre la watchlist de gappers
+  type: orb_stop
+  or_minutes: 5
+  stop_atr: 0.10
+  min_or_bars: 3
+  last_entry_et: "15:45"
+
+h3_vwap_wide:                 # H3: VWAP con stops amplios
+  type: vwap_reversion
+  k_sigma: 2.5
+  min_bars: 30
+  lookback_extreme: 10
+  stop_buffer_atr: 0.25
+  min_rr: 1.0
+  max_hold_minutes: 90
+  first_entry_et: "10:00"
+  last_entry_et: "15:00"
+  direction: both
+  max_trades_per_symbol: 1

@@ -55,6 +55,38 @@ def calibrate(
     return pl.DataFrame(rows)
 
 
+def entry_then_stop_probability(trades: pl.DataFrame, api_key: str, secret: str, n: int = 200, seed: int = 7) -> dict:
+    """Pre-registro ronda 2: en barras de entrada ambiguas (tocan nivel y stop), ¿qué ocurrió primero?
+
+    Con los trades tick SIP del minuto de entrada: se busca el primer print que alcanza el precio de
+    ejecución y se comprueba si DESPUÉS hubo un print más allá del stop. p = proporción "entrada y luego stop".
+    """
+    from alpaca.data.requests import StockTradesRequest
+
+    client = StockHistoricalDataClient(api_key, secret, raw_data=True)
+    amb = trades.filter(pl.col("ambiguous"))
+    sample = amb.sample(min(n, amb.height), seed=seed)
+    hits = total = 0
+    for r in sample.iter_rows(named=True):
+        t0 = r["entry_ts"]
+        req = StockTradesRequest(
+            symbol_or_symbols=r["symbol"], start=t0.replace(tzinfo=UTC),
+            end=(t0 + timedelta(seconds=60)).replace(tzinfo=UTC), feed=DataFeed.SIP, limit=10000,
+        )  # fmt: skip
+        ticks = (with_retries(lambda req=req: client.get_stock_trades(req), 3) or {}).get(r["symbol"], [])
+        px = [x["p"] for x in ticks]
+        side, fill_raw = r["side"], r["entry_px"] - r["side"] * r["slippage_ps"]
+        trig = next((k for k, p in enumerate(px) if (p >= fill_raw if side == 1 else p <= fill_raw)), None)
+        if trig is None:
+            continue
+        total += 1
+        after = px[trig:]
+        if any((p <= r["stop"] if side == 1 else p >= r["stop"]) for p in after):
+            hits += 1
+    return {"p": hits / total if total else float("nan"), "n_resueltos": total, "n_muestra": sample.height,
+            "n_ambiguos": amb.height}  # fmt: skip
+
+
 def fit(df: pl.DataFrame) -> dict:
     """k = mediana(medio spread real / rango 1m). También el ajuste log-log como diagnóstico."""
     d = df.filter((pl.col("range_1m") > 0) & (pl.col("half_spread") > 0))

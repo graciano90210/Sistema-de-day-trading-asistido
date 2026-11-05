@@ -93,6 +93,21 @@ CREATE TABLE IF NOT EXISTS scan_log (
     session_date DATE PRIMARY KEY, n_universe INTEGER, n_candidates INTEGER, n_watchlist INTEGER,
     status VARCHAR, error VARCHAR, finished_at TIMESTAMP
 );
+-- Primera vela de 5 min de la sesión regular (09:30–09:35), universo amplio (ronda 2, H1).
+CREATE TABLE IF NOT EXISTS opening_bars (
+    symbol VARCHAR NOT NULL, session_date DATE NOT NULL,
+    ts_utc TIMESTAMP NOT NULL, available_at TIMESTAMP NOT NULL,
+    open DOUBLE, high DOUBLE, low DOUBLE, close DOUBLE, volume DOUBLE, vwap DOUBLE,
+    PRIMARY KEY (symbol, session_date)
+);
+CREATE TABLE IF NOT EXISTS opening_log (session_date DATE PRIMARY KEY, n_requested INTEGER, n_bars INTEGER);
+-- Selección diaria de "stocks in play" (H1), decidida a las 09:35 ET.
+CREATE TABLE IF NOT EXISTS stocks_in_play (
+    session_date DATE NOT NULL, rank INTEGER NOT NULL, symbol VARCHAR NOT NULL,
+    rvol DOUBLE, side INTEGER, or_open DOUBLE, or_high DOUBLE, or_low DOUBLE, or_close DOUBLE,
+    atr14 DOUBLE, avg_volume DOUBLE, prev_close DOUBLE,
+    PRIMARY KEY (session_date, symbol)
+);
 CREATE TABLE IF NOT EXISTS sec_fetch_log (cik BIGINT PRIMARY KEY, fetched_at TIMESTAMP, status VARCHAR);
 CREATE TABLE IF NOT EXISTS ingest_log (
     symbol VARCHAR NOT NULL, timeframe VARCHAR NOT NULL,

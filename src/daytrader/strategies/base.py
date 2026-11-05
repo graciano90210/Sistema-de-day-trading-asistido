@@ -51,9 +51,16 @@ class Signal:
     target: float | None
     max_hold: timedelta | None = None
     meta: dict = field(default_factory=dict, compare=False)
+    # Orden stop de entrada (ronda 2): se ejecuta cuando el precio alcanza entry_level entre decided_at y valid_until.
+    entry_type: str = "next_open"  # next_open | stop
+    entry_level: float | None = None
+    stop_offset: float | None = None  # stop = precio ejecutado ∓ stop_offset (si se define, reemplaza a `stop`)
+    valid_until: datetime | None = None
 
     @property
     def planned_risk(self) -> float:
+        if self.stop_offset is not None:
+            return self.stop_offset
         return abs(self.ref_price - self.stop)
 
 
@@ -62,6 +69,7 @@ StrategyFn = Callable[[pl.DataFrame, DayContext, dict], list[Signal]]
 
 def get_strategy(kind: str) -> StrategyFn:
     from daytrader.strategies.orb import orb
+    from daytrader.strategies.orb_stop import orb_stop
     from daytrader.strategies.vwap_reversion import vwap_reversion
 
-    return {"orb": orb, "vwap_reversion": vwap_reversion}[kind]
+    return {"orb": orb, "orb_stop": orb_stop, "vwap_reversion": vwap_reversion}[kind]

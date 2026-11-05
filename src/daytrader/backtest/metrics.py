@@ -67,6 +67,30 @@ def equity_stats(eq: pl.DataFrame, value: str = "equity") -> dict:
     }
 
 
+def deflated_sharpe(returns: np.ndarray, trial_sharpes: list[float]) -> float:
+    """Deflated Sharpe Ratio (Bailey y López de Prado, 2014): P(SR verdadero > SR0), con SR0 el máximo
+    esperado entre N intentos sin habilidad. Sharpe y varianzas en frecuencia diaria (no anualizados)."""
+    from scipy.stats import kurtosis, norm, skew
+
+    r = np.asarray(returns, dtype=float)
+    t = len(r)
+    if t < 3 or r.std(ddof=1) == 0:
+        return float("nan")
+    sr = r.mean() / r.std(ddof=1)
+    n = max(len(trial_sharpes), 2)
+    var_sr = float(np.var(trial_sharpes, ddof=1)) if len(trial_sharpes) > 1 else 0.0
+    gamma = 0.5772156649
+    sr0 = math.sqrt(var_sr) * ((1 - gamma) * norm.ppf(1 - 1 / n) + gamma * norm.ppf(1 - 1 / (n * math.e)))
+    g3, g4 = float(skew(r)), float(kurtosis(r, fisher=False))
+    denom = math.sqrt(max(1 - g3 * sr + (g4 - 1) / 4 * sr**2, 1e-12))
+    return float(norm.cdf((sr - sr0) * math.sqrt(t - 1) / denom))
+
+
+def daily_sharpe(eq: pl.DataFrame) -> float:
+    r = eq["ret"].fill_null(0.0).to_numpy()
+    return float(r.mean() / r.std(ddof=1)) if r.std(ddof=1) > 0 else 0.0
+
+
 def spy_buy_and_hold(store, start, end) -> pl.DataFrame:
     """Equity diaria de comprar SPY al cierre previo a `start` y mantener (precios raw; SPY sin splits)."""
     df = store.query(

@@ -252,6 +252,110 @@ def backfill(
 
 
 @app.command()
+def opening(
+    start: Annotated[str, typer.Option(help="YYYY-MM-DD")] = "2024-11-22",
+    end: Annotated[str | None, typer.Option(help="YYYY-MM-DD inclusive (por defecto última sesión completa)")] = None,
+    workers: Annotated[int, typer.Option(help="Días en paralelo")] = 4,
+) -> None:
+    """Ronda 2 / H1: velas de apertura 5 min del universo amplio, selección de stocks in play y barras 1m del top 20."""
+    from daytrader.data.alpaca_client import make_multi_fetcher
+    from daytrader.market_calendar import sessions
+    from daytrader.scanner.history import ensure_intraday
+    from daytrader.scanner.opening import ensure_opening_bars, select_stocks_in_play
+
+    logging.basicConfig(level=logging.WARNING)
+    cfg = load_config()
+    key, secret = Secrets().require_alpaca()
+    d1 = date.fromisoformat(end) if end else last_complete_session()
+    days = sessions(date.fromisoformat(start), d1)["session_date"].to_list()
+
+    def factory():
+        return make_multi_fetcher(
+            key, secret, cfg.data.feed, cfg.data.adjustment, cfg.data.max_requests_per_minute // workers
+        )
+
+    with Store(cfg.db_path, memory_limit=cfg.duckdb_memory_limit) as store:
+        with Progress(
+            TextColumn("aperturas {task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TimeElapsedColumn(),
+            console=console,
+        ) as prog:
+            task = prog.add_task("", total=len(days))
+            ensure_opening_bars(store, factory, days, workers,
+                                on_day=lambda d, n: prog.update(task, advance=1, description=f"{d} ({n})"))  # fmt: skip
+        fetch = factory()
+        have = set(store.query("SELECT DISTINCT session_date FROM stocks_in_play")["session_date"].to_list())
+        n_sel = 0
+        with Progress(
+            TextColumn("selección + barras {task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TimeElapsedColumn(),
+            console=console,
+        ) as prog:
+            task = prog.add_task("", total=len(days))
+            for d in days:
+                if d not in have:
+                    sel = select_stocks_in_play(store, d)
+                    if not sel.is_empty():
+                        store.upsert("stocks_in_play", sel)
+                        ensure_intraday(
+                            store, fetch, sel.filter(pl.col("side") != 0)["symbol"].to_list(), d, cfg.data.feed
+                        )
+                        n_sel += sel.height
+                prog.update(task, advance=1, description=str(d))
+        console.print(f"Selecciones nuevas: {n_sel}")
+
+
+@app.command()
+def round2(
+    p_entry: Annotated[float | None, typer.Option(help="Fijar p (si no, se calibra con ticks)")] = None,
+) -> None:
+    """Ronda 2 pre-registrada (H1–H5) en el periodo de desarrollo → reports/ronda2_IS.md"""
+    import glob
+
+    from daytrader.config import ROOT, load_yaml
+    from daytrader.data.alpaca_client import make_multi_fetcher
+    from daytrader.research.report2 import render
+    from daytrader.research.round2 import finalize, run_round2, trial_sharpes_round1
+
+    logging.basicConfig(level=logging.WARNING)
+    cfg, bt, strat, scfg = (
+        load_config(),
+        load_yaml("backtest.yaml"),
+        load_yaml("strategies.yaml"),
+        load_yaml("scanner.yaml"),
+    )
+    key, secret = Secrets().require_alpaca()
+    holdout = date.fromisoformat(bt["holdout_start"])
+    d0, d1 = date.fromisoformat(bt["in_sample_start"]), holdout - timedelta(days=1)
+
+    spy_path = ROOT / "data" / "spy_daily_2016.parquet"
+    if not spy_path.exists():
+        from datetime import datetime
+
+        raw = make_multi_fetcher(key, secret)(["SPY"], "1d", datetime(2015, 12, 1), datetime(2026, 1, 1))
+        raw.with_columns(pl.col("ts_utc").dt.date().alias("session_date")).write_parquet(spy_path)
+    spy_long = pl.read_parquet(spy_path).filter(pl.col("session_date") < holdout)
+
+    with Store(cfg.db_path, read_only=True) as store:
+        with console.status("Ronda 2: backtests, calibración, HMM y meta-labeling…"):
+            result = run_round2(store, bt, strat, scfg, load_universe(), spy_long, p_entry, (key, secret), d0, d1)
+        r1 = sorted(glob.glob(str(ROOT / "data" / "backtests" / "*__20*-12-03_2025-12-31.parquet")))
+        r1 = [f for f in r1 if any(s in f for s in ("orb_5__", "orb_15__", "vwap_rev__"))]
+        round1 = trial_sharpes_round1(store, bt, r1)
+    rows = finalize(result, round1)
+    (cfg.reports_path / "ronda2_IS.md").write_text(render(result, rows, d0, d1, round1))
+    for r in rows:
+        console.print(f"  {r['config']:<11} trades={r['trades']:>5} R={r['R_neto'] or 0:+.3f} PF={r['profit_factor'] or 0:.2f} "
+                      f"DSR={r['dsr']:.2f} {'PASA' if r['pasa'] else ''}")  # fmt: skip
+    console.print(f"p calibrado = {result['calib']['p']}")
+    console.print(f"Reporte: {cfg.reports_path / 'ronda2_IS.md'}")
+
+
+@app.command()
 def backtest(
     strategies: Annotated[
         str, typer.Option(help="Variantes de config/strategies.yaml, coma-separadas")

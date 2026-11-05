@@ -44,12 +44,18 @@ class Trade:
     pnl: float  # $ netos a tamaño de referencia
     r_gross: float  # R antes de costos
     r_net: float  # R después de costos
+    # Solo órdenes stop de entrada: la barra de entrada tocó el stop pero cerró del lado bueno (orden incierto).
+    ambiguous: bool = False
+    r_net_opt: float | None = None  # resultado si en la barra ambigua el stop NO se ejecutó
+    pnl_opt: float | None = None
 
 
 def simulate(
     sig: Signal, bars: pl.DataFrame, costs: CostModel, eod_exit: datetime, ref_risk_dollars: float
 ) -> Trade | None:
     """`bars`: barras RTH del símbolo en la sesión (todas; el motor solo mira hacia delante tras entrar)."""
+    if sig.entry_type == "stop":
+        return simulate_stop_entry(sig, bars, costs, eod_exit, ref_risk_dollars)
     ts = bars["ts_utc"].to_list()
     o, h, lo, c, v = (bars[x].to_numpy() for x in ("open", "high", "low", "close", "volume"))
     i0 = next((i for i, t in enumerate(ts) if t >= sig.decided_at), None)
@@ -96,6 +102,74 @@ def simulate(
         entry_ts=ts[i0], entry_px=float(entry_px), exit_ts=exit_ts, exit_px=float(exit_px), exit_reason=reason,
         stop=sig.stop, target=sig.target, shares=shares, planned_risk=sig.planned_risk, slippage_ps=float(slip),
         fees=float(fees), pnl=float(pnl), r_gross=float(r_gross), r_net=float(pnl / (shares * sig.planned_risk)),
+    )  # fmt: skip
+
+
+def simulate_stop_entry(
+    sig: Signal, bars: pl.DataFrame, costs: CostModel, eod_exit: datetime, ref_risk_dollars: float
+) -> Trade | None:
+    """Orden stop de entrada en `entry_level`, stop de pérdida a `stop_offset` del precio ejecutado, salida EOD.
+
+    Barra de entrada: si toca el stop pero cierra del lado bueno, el orden es incierto → `ambiguous`.
+    `r_net` es el supuesto conservador (stop en esa barra); `r_net_opt`, el optimista (sigue abierta).
+    """
+    ts = bars["ts_utc"].to_list()
+    o, h, lo, c, v = (bars[x].to_numpy() for x in ("open", "high", "low", "close", "volume"))
+    side, level, off = sig.side, float(sig.entry_level), float(sig.stop_offset)
+    valid_until = min(sig.valid_until or eod_exit, eod_exit)
+    shares = int(math.floor(ref_risk_dollars / off)) if off > 0 else 0
+    if shares < 1:
+        return None
+    i0 = None
+    for i, t in enumerate(ts):
+        if t < sig.decided_at:
+            continue
+        if t >= valid_until:
+            break
+        if (side == 1 and h[i] >= level) or (side == -1 and lo[i] <= level):
+            i0 = i
+            break
+    if i0 is None:
+        return None
+    prior = slice(0, i0)
+    slip = costs.slippage_per_share(level, h[prior], lo[prior], c[prior], v[prior], shares)
+    fill_raw = float(max(level, o[i0]) if side == 1 else min(level, o[i0]))  # gap a través del nivel → apertura
+    entry_px = fill_raw + side * slip
+    stop = entry_px - side * off
+
+    def run(skip_entry_bar_touch: bool):
+        for i in range(i0, len(ts)):
+            if i > i0 and ts[i] >= eod_exit:
+                return float(o[i]), ts[i], "eod", slip
+            touched = lo[i] <= stop if side == 1 else h[i] >= stop
+            if i == i0:
+                closed_beyond = (c[i] - stop) * side <= 0
+                if closed_beyond or (touched and not skip_entry_bar_touch):
+                    return stop, ts[i], "stop", slip * costs.stop_slippage_mult
+                continue
+            if touched:
+                raw = float(min(o[i], stop) if side == 1 else max(o[i], stop))
+                return raw, ts[i], "stop", slip * costs.stop_slippage_mult
+        return float(c[-1]), ts[-1], "eod", slip
+
+    def outcome(res):
+        raw_exit, exit_ts, reason, exit_slip = res
+        exit_px = raw_exit - side * exit_slip
+        fees = costs.fees(shares, entry_px, exit_px, side)
+        pnl = (exit_px - entry_px) * side * shares - fees
+        return exit_px, exit_ts, reason, pnl, (raw_exit - fill_raw) * side / off, fees
+
+    cons = outcome(run(False))
+    touched0 = lo[i0] <= stop if side == 1 else h[i0] >= stop
+    ambiguous = bool(touched0 and (c[i0] - stop) * side > 0)
+    opt = outcome(run(True)) if ambiguous else cons
+    exit_px, exit_ts, reason, pnl, r_gross, fees = cons
+    return Trade(
+        symbol=sig.symbol, session_date=sig.session_date, strategy=sig.strategy, side=side, signal_ts=sig.signal_ts,
+        entry_ts=ts[i0], entry_px=float(entry_px), exit_ts=exit_ts, exit_px=float(exit_px), exit_reason=reason,
+        stop=float(stop), target=None, shares=shares, planned_risk=off, slippage_ps=float(slip), fees=float(fees),
+        pnl=float(pnl), r_gross=float(r_gross), r_net=float(pnl / (shares * off)), ambiguous=ambiguous,
+        r_net_opt=float(opt[3] / (shares * off)), pnl_opt=float(opt[3]),
     )  # fmt: skip
 
 
