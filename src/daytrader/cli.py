@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Annotated
 
 import polars as pl
@@ -194,6 +194,18 @@ def watchlist(
             store, wl_syms, news_start, res.cutoff_utc, names, scfg["catalysts"]["max_symbols_for_relevance"]
         )
         cats = catalyst_summary(news)
+        if wl_syms and not cutoff and not top:  # misma definición que el backfill → se guarda (la usa `mediodia`)
+            from daytrader.scanner.history import WL_COLUMNS
+
+            wl_out = res.watchlist.with_columns(
+                pl.lit(d).alias("session_date"), pl.lit(res.cutoff_utc).alias("cutoff_utc")
+            )
+            wl_out = wl_out.join(cats.drop("top_headline"), on="symbol", how="left") if not cats.is_empty() else wl_out
+            for c in WL_COLUMNS:
+                if c not in wl_out.columns:
+                    wl_out = wl_out.with_columns(pl.lit(None).alias(c))
+            wl_out = wl_out.with_columns(pl.col("catalyst").fill_null("sin_noticias"))
+            store.upsert("watchlists", wl_out.select(WL_COLUMNS).with_columns(pl.col("rank").cast(pl.Int32)))
 
     md = render_watchlist(res, names, cats, news)
     cfg.reports_path.mkdir(parents=True, exist_ok=True)
@@ -589,7 +601,9 @@ def positions() -> None:
     kind = "efectivo" if rcfg.account_type == "cash" else "margen"
     sim = f" (simulado, cuenta de {kind})" if rcfg.simulated_capital else ""
     if rcfg.account_type == "margin" and acc.equity < rcfg.pdt_equity_min:
-        console.print(f"Regla PDT: {acc.day_trades_5d} / {rcfg.pdt_max_day_trades} day trades en las últimas 5 sesiones")
+        console.print(
+            f"Regla PDT: {acc.day_trades_5d} / {rcfg.pdt_max_day_trades} day trades en las últimas 5 sesiones"
+        )
     console.print(f"Capital{sim} ${acc.equity:,.2f} · PnL del día {pnl:+,.2f} ({pnl / acc.last_equity:+.2%}) · "
                   f"trades hoy {acc.trades_today}/{rcfg.max_trades_per_day} · kill switch en {-rcfg.daily_loss_limit:.0%}")  # fmt: skip
     for p in broker.positions():
@@ -707,6 +721,157 @@ def note(
     j.note(fingerprint, text, "error" if error else "nota")
     console.print("Nota guardada.")
     j.close()
+
+
+@app.command()
+def historia(
+    paso: Annotated[str, typer.Option(help="copiar, splits, diarias, universo, minutos o todo")] = "todo",
+    top: Annotated[int, typer.Option(help="Tamaño del universo point-in-time por año")] = 100,
+) -> None:
+    """Fase 7: historia 2015–2025 en data/history.duckdb (incremental; no toca market.duckdb salvo para leer)."""
+    from datetime import date as _d
+
+    from daytrader.config import load_yaml
+    from daytrader.data.alpaca_client import fetch_splits, make_bar_fetcher, make_multi_fetcher
+    from daytrader.research import history10y as H
+    from daytrader.scanner.universe import eligible_symbols, ingest_universe_daily
+
+    logging.basicConfig(level=logging.WARNING)
+    cfg, scfg = load_config(), load_yaml("scanner.yaml")["universe"]
+    key, secret = Secrets().require_alpaca()
+    pasos = ["copiar", "splits", "diarias", "universo", "minutos"] if paso == "todo" else [paso]
+    hist_path = cfg.db_path.parent / "history.duckdb"
+    say = lambda m: console.print(f"[{datetime.now():%H:%M:%S}] {m}")  # noqa: E731
+    with Store(hist_path, memory_limit=cfg.duckdb_memory_limit) as hist:
+        if "copiar" in pasos:
+            say(f"copiado desde market.duckdb: {H.copy_from_market(hist, str(cfg.db_path))}")
+        if "splits" in pasos:
+            n = hist.upsert_splits(fetch_splits(key, secret, None, H.DAILY_START, H.DAILY_COPY_FROM))
+            say(f"splits 2015–2024: {n:,}")
+        if "diarias" in pasos:
+            syms = eligible_symbols(hist, scfg["exchanges"], include_inactive=True)
+            fm = make_multi_fetcher(key, secret, cfg.data.feed, cfg.data.adjustment, cfg.data.max_requests_per_minute)
+            last = [0]
+
+            def on_batch(done, total):
+                if done - last[0] >= 2000 or done == total:
+                    last[0] = done
+                    say(f"diarias {done:,}/{total:,} símbolos")
+
+            rows, err = ingest_universe_daily(hist, fm, syms, H.DAILY_START, H.DAILY_COPY_FROM, cfg.data.feed,
+                                              on_batch=on_batch)  # fmt: skip
+            say(f"diarias: {rows:,} filas nuevas, {err} lotes con error")
+        if "universo" in pasos:
+            u = H.build_universe(hist, top)
+            say(f"universo point-in-time: {u.height} filas, {u['symbol'].n_unique()} símbolos distintos")
+        if "minutos" in pasos:
+            fetch = make_bar_fetcher(key, secret, cfg.data.feed, cfg.data.adjustment,
+                                     cfg.data.max_requests_per_minute, cfg.data.max_retries)  # fmt: skip
+            for y in range(H.FIRST_YEAR, H.LAST_YEAR + 1):
+                syms = H.universe_for(hist, y)
+                n_done = [0]
+
+                def on_chunk(sym, c0, _c1, n, n_done=n_done, y=y, syms=syms):
+                    n_done[0] += 1
+                    if n_done[0] % 120 == 0:
+                        say(f"1m {y}: {n_done[0]}/{len(syms) * 12} bloques (último {sym} {c0:%Y-%m})")
+
+                s = run_ingest(hist, fetch, syms, _d(y, 1, 1), _d(y + 1, 1, 1), "1m", cfg.data.feed, on_chunk=on_chunk)
+                say(
+                    f"1m {y}: {s.chunks_done} nuevos, {s.chunks_skipped} en caché, {s.rows:,} filas, {len(s.errors)} errores"
+                )
+
+
+@app.command()
+def mediodia(
+    n: Annotated[int, typer.Option(help="Cuántos tickers de la watchlist re-evaluar")] = 15,
+) -> None:
+    """Re-evalúa la watchlist de hoy con datos de ahora y propone 3 candidatos (luego: `daytrader contexto X`)."""
+    from datetime import UTC, datetime, timedelta
+    from datetime import time as dtime
+
+    from rich.table import Table
+
+    from daytrader.config import load_yaml
+    from daytrader.data.alpaca_client import make_multi_fetcher
+    from daytrader.execution.broker import PaperBroker
+    from daytrader.execution.context import compute
+    from daytrader.execution.journal import Journal
+    from daytrader.execution.midday import evaluate, top3
+    from daytrader.execution.risk import RiskConfig
+    from daytrader.execution.simulated import from_broker
+    from daytrader.market_calendar import ET, et_to_utc_naive, sessions
+
+    cfg = load_config()
+    key, secret = Secrets().require_alpaca()
+    now = datetime.now(UTC).replace(tzinfo=None)
+    today = datetime.now(UTC).astimezone(ET).date()
+    s = sessions(today - timedelta(days=40), today)
+    if s.is_empty() or s["session_date"][-1] != today:
+        console.print("Hoy no hay sesión.")
+        return
+    open_utc, close_utc = s["open_utc"][-1], s["close_utc"][-1]
+    with Store(cfg.db_path, read_only=True) as store:
+        wl = store.query("SELECT * FROM watchlists WHERE session_date = ? ORDER BY rank LIMIT ?", [today, n])
+    if wl.is_empty():
+        console.print("No hay watchlist de hoy: corre `uv run daytrader watchlist --date " + str(today) + "`.")
+        return
+    syms = wl["symbol"].to_list()
+    fetch = make_multi_fetcher(key, secret)
+    until = min(now - timedelta(minutes=16), close_utc)  # SIP: el plan gratuito no da los últimos 15 min
+    bars = fetch([*syms, "SPY", "QQQ"], "1m", et_to_utc_naive(today, dtime(4)), until)
+    daily = fetch([*syms, "SPY", "QQQ"], "1d", et_to_utc_naive(s["session_date"][0], dtime(0)),
+                  et_to_utc_naive(today, dtime(0)) - timedelta(minutes=1)).with_columns(
+        pl.col("ts_utc").dt.replace_time_zone("UTC").dt.convert_time_zone("America/New_York").dt.date().alias("session_date"))  # fmt: skip
+    daily = daily.filter(pl.col("session_date") < today)
+    broker = PaperBroker(key, secret)
+    rcfg = RiskConfig(**load_yaml("risk.yaml"))
+    acc = from_broker(broker, Journal(cfg.db_path.parent / "journal.duckdb"), rcfg, today)
+    elapsed = max(0.0, (until - open_utc).total_seconds() / (close_utc - open_utc).total_seconds())
+
+    def ctx_for(x):
+        q = broker.quote(x)
+        price = q["mid"] or q["ask"] or q["bid"]
+        return compute(x, bars.filter(pl.col("symbol") == x), daily.filter(pl.col("symbol") == x), price, open_utc), q
+
+    rel = {}
+    for r in ("SPY", "QQQ"):
+        rc, _ = ctx_for(r)
+        if rc.prev_close and rc.vwap:
+            rel[r] = ((rc.price / rc.prev_close - 1) * 100, rc.price > rc.vwap)
+    cands = []
+    for row in wl.iter_rows(named=True):
+        x = row["symbol"]
+        try:
+            c, q = ctx_for(x)
+        except Exception as exc:  # sin cotización: se omite
+            console.print(f"[dim]{x}: sin cotización ({exc})[/]")
+            continue
+        c.rel = rel
+        b = bars.filter((pl.col("symbol") == x) & (pl.col("ts_utc") >= open_utc))
+        dv = daily.filter(pl.col("symbol") == x).sort("session_date").tail(20)["volume"]
+        cands.append(evaluate(c, row["gap"], row["catalyst"], float(dv.mean()) if dv.len() else None,
+                              float(b["volume"].sum()), elapsed, q["bid"], q["ask"], acc.equity,
+                              rcfg.risk_per_trade, rcfg.account_type != "cash"))  # fmt: skip
+    best = {c.symbol for c in top3(cands)}
+    tab = Table(
+        title=f"Watchlist re-evaluada · {datetime.now(UTC).astimezone(ET):%H:%M} ET · capital ${acc.equity:,.0f}"
+    )
+    for h in ("", "ticker", "gap 09:25", "ahora vs ayer", "vol. relativo", "rango/ATR", "spread", "▲/▼", "precio",
+              "acciones (1R)", "catalizador", "puntos", "avisos"):  # fmt: skip
+        tab.add_column(h)
+    pct = lambda v, d=1: "—" if v is None else f"{v:+.{d}%}"  # noqa: E731
+    for c in sorted(cands, key=lambda c: c.score, reverse=True):
+        tab.add_row("★" if c.symbol in best else "", c.symbol, pct(c.gap_am), pct(c.change),
+                    "—" if c.rvol_rth is None else f"{c.rvol_rth:.1f}×", "—" if c.range_atr is None else f"{c.range_atr:.2f}",
+                    "—" if c.spread_pct is None else f"{c.spread_pct:.2%}", f"{c.up}/{c.down} {c.lean}", f"{c.price:,.2f}",
+                    str(c.shares_1r), c.catalyst or "", f"{c.score:.2f}", "; ".join(c.notes))  # fmt: skip
+    console.print(tab)
+    console.print(f"[dim]Barras SIP hasta {until.replace(tzinfo=UTC).astimezone(ET):%H:%M} ET. Volumen relativo aprox. "
+                  "(el volumen diario incluye pre/post). Ranking descriptivo, no una señal probada.[/]")  # fmt: skip
+    if rcfg.account_type == "margin" and acc.equity < rcfg.pdt_equity_min:
+        console.print(f"Regla PDT: {acc.day_trades_5d} / {rcfg.pdt_max_day_trades} day trades usados en 5 sesiones.")
+    console.print("Siguiente paso: [bold]uv run daytrader contexto TICKER[/] para cada candidato elegido.")
 
 
 @app.command(name="is-session")

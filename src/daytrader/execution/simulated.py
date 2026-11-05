@@ -38,4 +38,7 @@ def from_broker(broker, journal, cfg: RiskConfig, today: date) -> AccountState:
         float(a.equity), float(a.last_equity), len(pos), sum(abs(float(p.market_value)) for p in pos),
         journal.trades_today(today), journal.notional_today(today), journal.realized_pnl(since, today), cfg,
     )  # fmt: skip
-    return replace(st, day_trades_5d=journal.entries_since(pdt_window_start(today)))
+    w0 = pdt_window_start(today)
+    if cfg.simulated_capital is not None:
+        w0 = max(w0, since)  # la cuenta simulada empieza en simulated_start: lo anterior no cuenta para PDT
+    return replace(st, day_trades_5d=journal.entries_since(w0))

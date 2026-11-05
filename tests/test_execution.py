@@ -221,3 +221,20 @@ def test_pdt_window_is_five_sessions():
 
     assert pdt_window_start(date(2026, 11, 6)) == date(2026, 11, 2)  # lun–vie
     assert pdt_window_start(date(2026, 11, 8)) == date(2026, 11, 2)  # domingo: últimas 5 sesiones
+
+
+def test_midday_candidate_scoring():
+    from daytrader.execution.context import Context
+    from daytrader.execution.midday import evaluate, top3
+
+    def ctx(sym, price, vwap):
+        return Context(sym, price, 50.0, 2.0, 51.0, 49.5, 51.0, 50.0, 53.0, 49.0, vwap, price * 0.99, None)
+
+    hot = evaluate(ctx("HOT", 52.0, 51.0), 0.05, "earnings", 1e6, 1.5e6, 0.5, 51.99, 52.01, 3000, 0.01, True)
+    assert hot.rvol_rth == 3.0 and hot.range_atr == 2.0 and hot.lean == "largo"
+    assert hot.shares_1r == 57  # min(30 / 0,5 = 60, 3000 / 52 = 57)
+    cold = evaluate(ctx("COLD", 52.0, 51.0), 0.04, None, 1e6, 2e5, 0.5, 51.8, 52.2, 3000, 0.01, True)
+    assert any("se enfrió" in n for n in cold.notes) and any("spread" in n for n in cold.notes)
+    short = evaluate(ctx("DN", 49.2, 50.5), -0.05, None, 1e6, 1.5e6, 0.5, 49.19, 49.21, 3000, 0.01, False)
+    assert short.lean == "corto" and any("no permite cortos" in n for n in short.notes)
+    assert [c.symbol for c in top3([cold, short, hot])][0] == "HOT"
