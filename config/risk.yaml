@@ -1,0 +1,15 @@
+# Risk-manager (fase 5). Reglas no negociables del proyecto, aplicadas a CADA orden antes de pedir confirmación.
+
+risk_per_trade: 0.01          # pérdida máxima si salta el stop = 1% del capital
+daily_loss_limit: 0.03        # kill switch: sin nuevas entradas si el PnL del día (realizado + flotante) <= -3%
+max_trades_per_day: 5
+max_positions: 3
+buying_power_mult: 4.0        # nocional total abierto <= 4× capital
+max_position_pct: 1.0         # nocional de UNA posición <= 100% del capital (antes del apalancamiento)
+min_stop_distance_pct: 0.002  # stop a >= 0,2% del precio (evita stops dentro del ruido/spread)
+max_stop_distance_pct: 0.10   # stop a <= 10% del precio
+no_entries_last_minutes: 15   # sin entradas en los últimos 15 min de la sesión
+no_entries_first_minutes: 0   # opcional: esperar N min tras la apertura
+flatten_et: "15:50"           # cierre total antes del final de la sesión
+confirm_timeout_s: 60         # la confirmación y/n caduca
+max_price_drift_r: 0.25       # se cancela si el precio se movió > 0,25 R entre el ticket y la confirmación

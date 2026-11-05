@@ -480,5 +480,199 @@ def backtest(
     console.print(f"Reporte: {cfg.reports_path / out}")
 
 
+# ============================================================== FASE 5: operativa PAPER con confirmación
+def _exec_ctx():
+    from datetime import UTC, datetime
+
+    from daytrader.config import load_yaml
+    from daytrader.execution.broker import PaperBroker
+    from daytrader.execution.journal import Journal
+    from daytrader.execution.risk import RiskConfig, Session
+    from daytrader.market_calendar import ET, sessions
+
+    cfg = load_config()
+    key, secret = Secrets().require_alpaca()
+    rcfg = RiskConfig(**load_yaml("risk.yaml"))
+    now = datetime.now(UTC).replace(tzinfo=None)
+    today = datetime.now(UTC).astimezone(ET).date()
+    s = sessions(today, today)
+    ses = Session(s["open_utc"][0], s["close_utc"][0]) if s.height else None
+    return cfg, rcfg, PaperBroker(key, secret), Journal(cfg.db_path.parent / "journal.duckdb"), ses, now, today
+
+
+def _show_ticket(t) -> None:
+    from rich.table import Table
+
+    tab = Table(title=f"TICKET {t.fingerprint()} · CUENTA PAPER", show_header=False)
+    d = "COMPRA (largo)" if t.side == "long" else "VENTA EN CORTO"
+    rows = [("Operación", f"{d} {t.qty} {t.symbol}"),
+            ("Entrada", f"{'límite ' + format(t.limit_price, '.2f') if t.entry_type == 'limit' else 'a mercado'} (ref. {t.ref_price:.2f})"),
+            ("Stop", f"{t.stop_price:.2f}  (riesgo {t.risk_per_share:.2f}/acción)"),
+            ("Objetivo", f"{t.target_price:.2f}" if t.target_price else "— (salida por stop o cierre forzado)"),
+            ("Riesgo total (1R)", f"${t.risk_usd:,.2f}"), ("Nocional", f"${t.notional:,.2f}")]  # fmt: skip
+    if t.target_price:
+        rows.append(
+            ("Recompensa/riesgo", f"{abs(t.target_price - (t.limit_price or t.ref_price)) / t.risk_per_share:.2f} R")
+        )
+    for k, v in rows:
+        tab.add_row(k, v)
+    console.print(tab)
+
+
+@app.command()
+def trade(
+    symbol: Annotated[str, typer.Argument(help="Ticker, p. ej. NVDA")],
+    side: Annotated[str, typer.Argument(help="largo | corto")],
+    stop: Annotated[float, typer.Option(help="Precio del stop (obligatorio)")],
+    target: Annotated[float | None, typer.Option("--objetivo", help="Precio objetivo (opcional)")] = None,
+    limit: Annotated[float | None, typer.Option("--limite", help="Entrada con orden límite a este precio")] = None,
+    setup: Annotated[str, typer.Option(help="Setup (p. ej. ORB, reversión VWAP)")] = "",
+    catalyst: Annotated[str, typer.Option("--catalizador")] = "",
+    notes: Annotated[str, typer.Option("--notas")] = "",
+) -> None:
+    """Propones una operación; el sistema calcula el tamaño (1%), aplica las reglas, pide y/n y la envía a PAPER."""
+    from daytrader.execution.executor import ask_yes_no, run_ticket
+    from daytrader.execution.risk import build_ticket
+
+    side_n = {"largo": "long", "long": "long", "corto": "short", "short": "short"}.get(side.lower())
+    if side_n is None:
+        raise typer.BadParameter("side debe ser 'largo' o 'corto'")
+    cfg, rcfg, broker, journal, ses, now, today = _exec_ctx()
+    q = broker.quote(symbol.upper())
+    ref = q["ask"] if side_n == "long" else q["bid"]
+    ref = ref or q["mid"]
+    console.print(f"[dim]Cotización IEX {symbol.upper()}: bid {q['bid']:.2f} · ask {q['ask']:.2f}[/]")
+    acc = broker.account_state(journal.trades_today(today))
+    t = build_ticket(symbol, side_n, ref, stop, target, acc, rcfg, now, "limit" if limit else "market", limit,
+                     setup, catalyst, notes)  # fmt: skip
+
+    def requote(sym):
+        qq = broker.quote(sym)
+        return (qq["ask"] if side_n == "long" else qq["bid"]) or qq["mid"]
+
+    from datetime import UTC, datetime
+
+    out = run_ticket(t, acc, ses, rcfg, broker, journal, now=lambda: datetime.now(UTC).replace(tzinfo=None),
+                     ask=ask_yes_no, show=_show_ticket, requote=requote)  # fmt: skip
+    color = {"enviado": "green", "rechazado": "red", "deriva": "yellow"}.get(out.status, "white")
+    console.print(f"[{color}]Resultado: {out.status.upper()}[/] {'; '.join(out.reasons)} {out.order_id or ''}")
+    journal.close()
+
+
+@app.command()
+def positions() -> None:
+    """Posiciones abiertas y estado del día en la cuenta PAPER."""
+    cfg, rcfg, broker, journal, ses, now, today = _exec_ctx()
+    acc = broker.account_state(journal.trades_today(today))
+    pnl = acc.equity - acc.last_equity
+    console.print(f"Capital ${acc.equity:,.2f} · PnL del día {pnl:+,.2f} ({pnl / acc.last_equity:+.2%}) · "
+                  f"trades hoy {acc.trades_today}/{rcfg.max_trades_per_day} · kill switch en {-rcfg.daily_loss_limit:.0%}")  # fmt: skip
+    for p in broker.positions():
+        console.print(
+            f"  {p['symbol']:6} {p['side']:5} {p['qty']:>8.0f} @ {p['avg_entry']:.2f}  PnL {p['unrealized_pl']:+,.2f}"
+        )
+    journal.close()
+
+
+@app.command()
+def guard() -> None:
+    """Vigila la sesión: con tu autorización (y/n), cierra todo a la hora de flatten_et (15:50 ET)."""
+    import time as _t
+    from datetime import UTC, datetime
+    from datetime import time as dtime
+    from datetime import timedelta as _td
+
+    from daytrader.execution.executor import ask_yes_no
+    from daytrader.execution.sync import sync_day
+    from daytrader.market_calendar import et_to_utc_naive
+
+    cfg, rcfg, broker, journal, ses, now, today = _exec_ctx()
+    if ses is None:
+        console.print("Hoy no hay sesión.")
+        return
+    h, m = (int(x) for x in rcfg.flatten_et.split(":"))
+    flat_at = min(et_to_utc_naive(today, dtime(h, m)), ses.close_utc - _td(minutes=10))
+    ans = ask_yes_no(f"¿Autorizas cerrar TODAS las posiciones paper a las {rcfg.flatten_et} ET? (y/n): ", 120)
+    if ans != "y":
+        console.print(
+            "[yellow]Sin autorización: guard solo vigilará; deberás cerrar manualmente con 'daytrader flatten'.[/]"
+        )
+    journal.event("guard_autorizacion", str(ans))
+    while datetime.now(UTC).replace(tzinfo=None) < flat_at:
+        _t.sleep(15)
+    if ans == "y":
+        broker.flatten()
+        journal.event("flatten", f"cierre automático autorizado a las {rcfg.flatten_et} ET")
+        console.print("[green]Posiciones cerradas.[/]")
+    _t.sleep(20)
+    console.print(f"Trades sincronizados: {sync_day(broker, journal, today)}")
+    journal.close()
+
+
+@app.command()
+def flatten() -> None:
+    """Cierra todas las posiciones paper y cancela órdenes (pide confirmación y/n)."""
+    from daytrader.execution.executor import ask_yes_no
+
+    cfg, rcfg, broker, journal, ses, now, today = _exec_ctx()
+    if ask_yes_no("¿Cerrar TODAS las posiciones paper ahora? (y/n): ", 60) == "y":
+        broker.flatten()
+        journal.event("flatten", "manual")
+        console.print("[green]Hecho.[/]")
+    journal.close()
+
+
+@app.command()
+def sync(day: Annotated[str | None, typer.Option("--date")] = None) -> None:
+    """Trae las ejecuciones de Alpaca paper al journal (precio real, R, slippage real)."""
+    from daytrader.execution.sync import sync_day
+
+    cfg, rcfg, broker, journal, ses, now, today = _exec_ctx()
+    n = sync_day(broker, journal, date.fromisoformat(day) if day else today)
+    console.print(f"Trades sincronizados: {n}")
+    journal.close()
+
+
+@app.command()
+def journal(days: Annotated[int, typer.Option(help="Últimos N días")] = 30) -> None:
+    """Resumen del journal: tickets, trades cerrados y métricas en R."""
+    from daytrader.config import load_config as _lc
+    from daytrader.execution.journal import Journal
+
+    j = Journal(_lc().db_path.parent / "journal.duckdb")
+    console.print(
+        j.query(
+            f"SELECT status, count(*) AS n FROM tickets WHERE created_at >= now() - INTERVAL {int(days)} DAY GROUP BY 1"
+        )
+    )
+    t = j.query(f"SELECT * FROM trades WHERE session_date >= current_date - {int(days)} ORDER BY entry_ts")
+    if t.is_empty():
+        console.print("Sin trades cerrados en el periodo.")
+    else:
+        r = t["r_multiple"]
+        wins, losses = r.filter(r > 0), r.filter(r <= 0)
+        pf = wins.sum() / -losses.sum() if losses.sum() < 0 else float("inf")
+        console.print(f"Trades {t.height} · win rate {(r > 0).mean():.1%} · R medio {r.mean():+.2f} · PF {pf:.2f} · "
+                      f"slippage medio de entrada {t['entry_slippage_r'].mean():+.3f} R")  # fmt: skip
+        console.print(t.select("session_date", "symbol", "side", "entry_px", "exit_px", "exit_reason", "r_multiple"))
+    j.close()
+
+
+@app.command()
+def note(
+    fingerprint: Annotated[str, typer.Argument(help="Huella del ticket (ver 'daytrader journal')")],
+    text: Annotated[str, typer.Argument()],
+    error: Annotated[bool, typer.Option("--error", help="Marcar como error cometido")] = False,
+) -> None:
+    """Añade una nota (o un 'error cometido') a un trade del journal."""
+    from daytrader.config import load_config as _lc
+    from daytrader.execution.journal import Journal
+
+    j = Journal(_lc().db_path.parent / "journal.duckdb")
+    j.note(fingerprint, text, "error" if error else "nota")
+    console.print("Nota guardada.")
+    j.close()
+
+
 if __name__ == "__main__":
     app()

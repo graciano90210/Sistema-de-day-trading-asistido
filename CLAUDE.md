@@ -29,6 +29,10 @@ Sistema de trading intradía para acciones de EE. UU. Investigación y paper tra
 Python 3.12 + uv · alpaca-py · polars/pandas · DuckDB (`data/market.duckdb`) · pytest · Streamlit (fase 6).
 Lógica en `src/daytrader/`; las skills en `.claude/skills/<nombre>/` son wrappers delgados (SKILL.md + scripts/).
 
+## Estado
+Fases 1–5 cerradas. Búsqueda de estrategias intradía cerrada sin edge (25 intentos, ver README).
+OOS 2026 sigue sellado. Operativa paper discrecional vía `daytrader trade` (el usuario confirma y/n).
+
 ## Comandos
 - `uv run pytest` — tests
 - `uv run daytrader ingest` — descarga/actualiza datos (incremental, reanudable)
