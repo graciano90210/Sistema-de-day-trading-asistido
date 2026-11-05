@@ -67,7 +67,7 @@ def equity_stats(eq: pl.DataFrame, value: str = "equity") -> dict:
     }
 
 
-def deflated_sharpe(returns: np.ndarray, trial_sharpes: list[float]) -> float:
+def deflated_sharpe(returns: np.ndarray, trial_sharpes: list[float], n_trials: int | None = None) -> float:
     """Deflated Sharpe Ratio (Bailey y López de Prado, 2014): P(SR verdadero > SR0), con SR0 el máximo
     esperado entre N intentos sin habilidad. Sharpe y varianzas en frecuencia diaria (no anualizados)."""
     from scipy.stats import kurtosis, norm, skew
@@ -77,7 +77,7 @@ def deflated_sharpe(returns: np.ndarray, trial_sharpes: list[float]) -> float:
     if t < 3 or r.std(ddof=1) == 0:
         return float("nan")
     sr = r.mean() / r.std(ddof=1)
-    n = max(len(trial_sharpes), 2)
+    n = max(n_trials or len(trial_sharpes), 2)  # n_trials: intentos totales si no todos tienen Sharpe guardado
     var_sr = float(np.var(trial_sharpes, ddof=1)) if len(trial_sharpes) > 1 else 0.0
     gamma = 0.5772156649
     sr0 = math.sqrt(var_sr) * ((1 - gamma) * norm.ppf(1 - 1 / n) + gamma * norm.ppf(1 - 1 / (n * math.e)))

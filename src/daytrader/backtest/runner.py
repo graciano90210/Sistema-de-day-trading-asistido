@@ -131,8 +131,14 @@ def run_backtest(
     variants: dict[str, dict],
     bt_cfg: dict,
     costs: CostModel,
+    alt_costs: CostModel | None = None,
+    alt_variants: set[str] | None = None,
 ) -> pl.DataFrame:
-    """Corre todas las variantes sobre los contextos. Devuelve trades a tamaño de referencia."""
+    """Corre todas las variantes sobre los contextos. Devuelve trades a tamaño de referencia.
+
+    Con `alt_costs`, las señales de `alt_variants` se simulan también con ese modelo (columna `costs` = "alt";
+    las de `costs`, "base"); así las señales se generan una sola vez.
+    """
     ref_risk = float(bt_cfg["account"]["initial_equity"]) * float(bt_cfg["account"]["risk_per_trade"])
     eod_h, eod_m = (int(x) for x in bt_cfg["execution"]["eod_exit_et"].split(":"))
     fns = {name: (get_strategy(p["type"]), {**p, "name": name}) for name, p in variants.items()}
@@ -157,18 +163,25 @@ def run_backtest(
                 open_utc=c["open_utc"], close_utc=c["close_utc"], catalyst=row.get("catalyst"),
             )  # fmt: skip
             eod = min(et_to_utc_naive(sd, time(eod_h, eod_m)), c["close_utc"] - timedelta(minutes=10))
-            for fn, params in fns.values():
+            for name, (fn, params) in fns.items():
                 for sig in fn(day_bars, ctx, params):
                     tr = simulate(sig, day_bars, costs, eod, ref_risk)
                     if tr is not None:
-                        trades.append((tr, row.get("catalyst"), row["gap"]))
+                        trades.append((tr, row.get("catalyst"), row["gap"], "base"))
+                    if alt_costs is not None and (alt_variants is None or name in alt_variants):
+                        tr = simulate(sig, day_bars, alt_costs, eod, ref_risk)
+                        if tr is not None:
+                            trades.append((tr, row.get("catalyst"), row["gap"], "alt"))
     if not trades:
         return pl.DataFrame()
-    df = trades_frame([t for t, _, _ in trades])
-    return df.with_columns(
-        pl.Series("catalyst", [c for _, c, _ in trades], dtype=pl.Utf8),
-        pl.Series("gap", [g for _, _, g in trades], dtype=pl.Float64),
+    df = trades_frame([t[0] for t in trades])
+    df = df.with_columns(
+        pl.Series("catalyst", [t[1] for t in trades], dtype=pl.Utf8),
+        pl.Series("gap", [t[2] for t in trades], dtype=pl.Float64),
     )
+    if alt_costs is None:
+        return df
+    return df.with_columns(pl.Series("costs", [t[3] for t in trades], dtype=pl.Utf8))
 
 
 def session_list(start: date, end: date) -> list[date]:

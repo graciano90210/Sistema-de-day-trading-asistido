@@ -877,6 +877,44 @@ def mediodia(
     console.print("Siguiente paso: [bold]uv run daytrader contexto TICKER[/] para cada candidato elegido.")
 
 
+@app.command()
+def round4() -> None:
+    """Ronda 4 pre-registrada (fase 7) sobre data/history.duckdb → reports/ronda4.md"""
+    import glob
+
+    from daytrader.config import ROOT, load_yaml
+    from daytrader.research.report4 import render
+    from daytrader.research.round4 import prior_sharpes, run_round4
+    from daytrader.scanner.premarket import parse_hhmm
+
+    logging.basicConfig(level=logging.WARNING)
+    cfg, bt, strat, scfg = (
+        load_config(),
+        load_yaml("backtest.yaml"),
+        load_yaml("strategies.yaml"),
+        load_yaml("scanner.yaml"),
+    )
+    say = lambda m: console.print(f"[{datetime.now():%H:%M:%S}] {m}")  # noqa: E731
+    prior = prior_sharpes(sorted(glob.glob(str(ROOT / "data" / "backtests" / "*__*_2025-12-31.parquet")))
+                          + sorted(glob.glob(str(ROOT / "data" / "backtests" / "r[23]_*.parquet"))))  # fmt: skip
+    say(f"Sharpe de {len(prior)} intentos previos guardados (N total = 30)")
+    with Store(cfg.db_path.parent / "history.duckdb", read_only=True) as hist:
+        res = run_round4(hist, bt, strat, parse_hhmm(scfg["cutoff_et"]), prior, on_step=say)
+    out_dir = ROOT / "data" / "backtests"
+    for n in res["trials"]:
+        t = res["rows"][n]["validacion"]["_trades"]
+        if not t.is_empty():
+            t.write_parquet(out_dir / f"r4_{n}.parquet")
+    (cfg.reports_path / "ronda4.md").write_text(render(res))
+    for n in res["trials"]:
+        v = res["rows"][n]["validacion"]
+        say(
+            f"{n}: trades={v['trades']} R={v['R_neto'] or 0:+.3f} PF={v['profit_factor'] or 0:.2f} "
+            f"DSR={v.get('dsr') or 0:.2f} {'PASA' if v['pasa'] else 'no pasa'}"
+        )
+    say(f"Reporte: {cfg.reports_path / 'ronda4.md'}")
+
+
 @app.command(name="is-session")
 def is_session_cmd() -> None:
     """Sale con código 0 si hoy (hora de Nueva York) hay sesión NYSE; 1 si no (festivo o fin de semana)."""
