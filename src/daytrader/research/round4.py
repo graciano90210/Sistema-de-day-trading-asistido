@@ -21,7 +21,7 @@ log = logging.getLogger(__name__)
 
 N_TRIALS = 30  # 25 previos + P1, P2, H3', H5b', H4'
 PERIODS = {
-    "desarrollo": (date(2016, 1, 4), date(2021, 12, 31)),
+    "desarrollo": (date(2017, 1, 3), date(2021, 12, 31)),  # desviación 1: Alpaca empieza en 2016-01-04
     "validacion": (date(2022, 1, 3), date(2024, 10, 31)),
     "ya_visto": (date(2024, 11, 1), date(2025, 12, 31)),
 }

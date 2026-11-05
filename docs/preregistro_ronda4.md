@@ -14,7 +14,7 @@ como desviación y cuenta como un intento más.
 ## Periodos
 | Periodo | Fechas | Uso |
 |---|---|---|
-| Desarrollo | 2016-01-04 → 2021-12-31 | historia para HMM y meta-labeling; reporte informativo |
+| Desarrollo | 2017-01-03 → 2021-12-31 (ver desviación 1) | historia para HMM y meta-labeling; reporte informativo |
 | **Validación (decide)** | **2022-01-03 → 2024-10-31** | nunca usado en rondas 1–3 |
 | Ya visto | 2024-11-01 → 2025-12-31 | usado en rondas 1–3 (con otras reglas); solo informativo |
 | OOS sellado | ≥ 2026-01-01 | solo si algo pasa la validación, y con OK del usuario |
@@ -64,3 +64,8 @@ P2: tolerancia 0,05/0,15 ATR, profundidad 0,20/0,30 ATR; H3'/H5'/H4': sin vecino
 Los vecinos solo pueden vetar, nunca reemplazar a la configuración registrada.
 
 Si nada pasa: se informa con la misma claridad que en las rondas 1–3 y el OOS 2026 sigue sellado.
+
+## Desviaciones registradas
+1. **2026-11-05, antes de cualquier resultado:** los datos de Alpaca empiezan el 2016-01-04, así que el universo
+   point-in-time de 2016 (que requiere el año 2015) no existe. El periodo de desarrollo pasa a 2017-01-03 → 2021-12-31.
+   2016 queda solo como historia para el HMM de SPY. Validación, criterios y N no cambian.
