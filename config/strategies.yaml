@@ -65,3 +65,34 @@ h3_vwap_wide:                 # H3: VWAP con stops amplios
   last_entry_et: "15:00"
   direction: both
   max_trades_per_symbol: 1
+
+# ---------------- Ronda 4 (docs/preregistro_ronda4.md, 2026-11-05) — NO modificar ----------------
+p1_flag:                      # P1: bandera alcista/bajista sobre velas de 5 min
+  type: flag
+  pole_atr: 0.40              # mástil >= 0,40 × ATR14 diario
+  max_pole_bars: 6            # mástil de hasta 6 velas (30 min)
+  flag_min: 3                 # bandera de 3 a 8 velas
+  flag_max: 8
+  max_retrace: 0.5            # la bandera no retrocede más del 50% del mástil
+  vol_ratio: 0.7              # volumen medio bandera <= 0,7 × volumen medio mástil
+  valid_min: 15               # orden stop de entrada válida 15 min
+  target_r: 2.0
+  max_hold_min: 120
+  min_stop_pct: 0.002
+  first_decision_et: "10:00"
+  last_decision_et: "15:00"
+
+p2_double:                    # P2: doble suelo / doble techo sobre velas de 5 min
+  type: double
+  pivot_n: 3                  # pivote: extremo frente a 3 velas a cada lado (confirmado 3 velas después)
+  min_sep: 4                  # separación entre los dos extremos: 4 a 30 velas
+  max_sep: 30
+  tol_atr: 0.10               # |L2 − L1| <= 0,10 × ATR14
+  depth_atr: 0.25             # cuello − base >= 0,25 × ATR14
+  prior_bars: 12              # tendencia previa medida en las 12 velas antes del primer extremo
+  valid_min: 30
+  target_r: 1.0               # movimiento medido clásico ≈ 1 R
+  max_hold_min: 120
+  min_stop_pct: 0.002
+  first_decision_et: "10:00"
+  last_decision_et: "15:00"

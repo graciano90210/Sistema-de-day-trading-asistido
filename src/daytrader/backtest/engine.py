@@ -138,11 +138,13 @@ def simulate_stop_entry(
     fill_raw = float(max(level, o[i0]) if side == 1 else min(level, o[i0]))  # gap a través del nivel → apertura
     entry_px = fill_raw + side * slip
     stop = entry_px - side * off
+    tgt = fill_raw + side * sig.target_r * off if sig.target_r else None  # objetivo límite (ronda 4)
+    deadline = eod_exit if sig.max_hold is None else min(eod_exit, ts[i0] + sig.max_hold)
 
     def run(skip_entry_bar_touch: bool):
         for i in range(i0, len(ts)):
-            if i > i0 and ts[i] >= eod_exit:
-                return float(o[i]), ts[i], "eod", slip
+            if i > i0 and ts[i] >= deadline:
+                return float(o[i]), ts[i], ("eod" if deadline == eod_exit else "time"), slip
             touched = lo[i] <= stop if side == 1 else h[i] >= stop
             if i == i0:
                 closed_beyond = (c[i] - stop) * side <= 0
@@ -152,6 +154,8 @@ def simulate_stop_entry(
             if touched:
                 raw = float(min(o[i], stop) if side == 1 else max(o[i], stop))
                 return raw, ts[i], "stop", slip * costs.stop_slippage_mult
+            if tgt is not None and (h[i] > tgt if side == 1 else lo[i] < tgt):
+                return tgt, ts[i], "target", 0.0  # límite: solo si se supera, sin slippage
         return float(c[-1]), ts[-1], "eod", slip
 
     def outcome(res):
@@ -169,7 +173,7 @@ def simulate_stop_entry(
     return Trade(
         symbol=sig.symbol, session_date=sig.session_date, strategy=sig.strategy, side=side, signal_ts=sig.signal_ts,
         entry_ts=ts[i0], entry_px=float(entry_px), exit_ts=exit_ts, exit_px=float(exit_px), exit_reason=reason,
-        stop=float(stop), target=None, shares=shares, planned_risk=off, slippage_ps=float(slip), fees=float(fees),
+        stop=float(stop), target=tgt, shares=shares, planned_risk=off, slippage_ps=float(slip), fees=float(fees),
         pnl=float(pnl), r_gross=float(r_gross), r_net=float(pnl / (shares * off)), ambiguous=ambiguous,
         r_net_opt=float(opt[3] / (shares * off)), pnl_opt=float(opt[3]),
     )  # fmt: skip

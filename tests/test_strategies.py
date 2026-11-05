@@ -128,3 +128,64 @@ def test_orb_stop_direction_and_levels():
     doji = make_bars([100, 100.5, 99.5, 100.2, 100.0] + [100] * 10, spread=0.0)
     doji = doji.with_columns(pl.when(pl.col("ts_utc") == OPEN).then(100.0).otherwise(pl.col("open")).alias("open"))
     assert orb_stop(doji, ctx(), ORBSTOP) == []
+
+
+# ---------------- Ronda 4: patrones ----------------
+from daytrader.config import load_yaml  # noqa: E402
+from daytrader.strategies.patterns import double, flag  # noqa: E402
+
+_S = load_yaml("strategies.yaml")
+P1, P2 = _S["p1_flag"], _S["p2_double"]
+
+
+# Parámetros relajados SOLO aquí para que el ruido aleatorio genere señales (se prueba el anti-lookahead, no la regla).
+@pytest.mark.parametrize("fn,params", [(flag, {**P1, "vol_ratio": 10.0, "pole_atr": 0.3}),
+                                       (double, {**P2, "tol_atr": 0.3, "depth_atr": 0.15})])  # fmt: skip
+def test_patterns_prefix_invariance(fn, params):
+    """Mismo test anti-lookahead que las demás estrategias, sobre 60 días aleatorios; exige que haya señales."""
+    n_sig = 0
+    for seed in range(60):
+        bars = random_day(seed)
+        full = fn(bars, ctx(atr=1.5), params)
+        n_sig += len(full)
+        for s in full:
+            assert s.decided_at > s.signal_ts
+            prefix = bars.filter(pl.col("available_at") <= s.decided_at)
+            assert fn(prefix, ctx(atr=1.5), params) == [s]
+            future = pl.col("ts_utc") >= s.decided_at
+            trapped = bars.with_columns(
+                [pl.when(future).then(pl.col(x) * 3).otherwise(pl.col(x)).alias(x) for x in ("open", "high", "low", "close")]
+            )  # fmt: skip
+            assert fn(trapped, ctx(atr=1.5), params) == [s]
+        for k in (40, 95, 200):
+            early = fn(bars.filter(pl.col("available_at") <= OPEN + timedelta(minutes=k)), ctx(atr=1.5), params)
+            assert all(s in full for s in early)
+    assert n_sig >= 5
+
+
+def _five_min_path(points: list[float], vols: list[float] | None = None) -> pl.DataFrame:
+    """Barras de 1 min que recorren linealmente cada vela de 5 min entre puntos dados (cierres de 5 min)."""
+    closes, vol = [], []
+    for k in range(1, len(points)):
+        closes += list(np.linspace(points[k - 1], points[k], 6)[1:])
+        vol += [(vols[k] if vols else 3000.0)] * 5
+    b = make_bars(closes, spread=0.0)
+    return b.with_columns(pl.Series("volume", vol))
+
+
+def test_bull_flag_detected_with_levels():
+    # 30 min planos, mástil de 100 → 101,2 (3 velas, volumen alto), bandera de 4 velas en 100,9–101,1 (volumen bajo)
+    pts = [100.0] * 7 + [100.4, 100.8, 101.2] + [101.0, 100.95, 101.05, 101.0]
+    vols = [3000.0] * 7 + [9000.0] * 3 + [2000.0] * 4
+    s = flag(_five_min_path(pts, vols), ctx(atr=2.0), P1)
+    assert len(s) == 1 and s[0].side == 1 and s[0].entry_type == "stop" and s[0].target_r == 2.0
+    assert s[0].entry_level > s[0].stop and s[0].entry_level <= 101.2 + 0.01 + 1e-9
+
+
+def test_double_bottom_detected():
+    # caída 103 → 100, rebote a 101, vuelta a 100,05, y sube sin cruzar el cuello
+    down = list(np.linspace(103, 100, 9))
+    pts = [103.0] * 4 + down + [100.5, 101.0, 101.0, 100.6, 100.05, 100.3, 100.5, 100.6]
+    s = double(_five_min_path(pts), ctx(atr=2.0), P2)
+    assert len(s) == 1 and s[0].side == 1
+    assert abs(s[0].entry_level - 101.01) < 0.02 and s[0].stop < 100.05

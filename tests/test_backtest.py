@@ -263,3 +263,26 @@ def test_limit_target_and_stop_exits():
     b = bars([FLAT, (100.2, 100.4, 99.9, 100.1), (99.0, 99.2, 97.0, 97.5)] + [FLAT] * 3)
     t = simulate(lim_sig(), b, NOHS, EOD, 100)
     assert t.exit_reason == "stop" and t.exit_px == 98.0
+
+
+def test_stop_entry_with_r_target_and_time_stop():
+    """Ronda 4: orden stop de entrada con objetivo a 2 R desde el precio ejecutado."""
+    from datetime import datetime, timedelta
+
+    import polars as pl
+
+    from daytrader.backtest.costs import CostModel
+    from daytrader.backtest.engine import simulate
+    from daytrader.strategies.base import Signal
+
+    t0 = datetime(2025, 3, 14, 15, 0)
+    px = [100.0, 100.0, 100.6, 101.0, 101.5, 102.5, 103.0]
+    ts = [t0 + timedelta(minutes=i) for i in range(len(px))]
+    bars = pl.DataFrame({"ts_utc": ts, "open": px, "high": [p + 0.05 for p in px], "low": [p - 0.05 for p in px],
+                         "close": px, "volume": [1e6] * len(px)})  # fmt: skip
+    zero = CostModel(commission_per_share=0, sec_fee_rate=0, taf_per_share=0, taf_max=0, min_half_spread=0,
+                     half_spread_k=0, impact_k=0, lookback_bars=30, stop_slippage_mult=1.5)  # fmt: skip
+    sig = Signal("AAA", t0.date(), "p1", 1, t0, ts[1], 100.5, 100.0, None, max_hold=timedelta(minutes=120),
+                 entry_type="stop", entry_level=100.5, stop_offset=1.0, valid_until=ts[4], target_r=2.0)  # fmt: skip
+    tr = simulate(sig, bars, zero, ts[-1] + timedelta(hours=1), 1000.0)
+    assert tr.exit_reason == "target" and abs(tr.target - 102.6) < 1e-9 and abs(tr.r_net - 2.0) < 1e-9
