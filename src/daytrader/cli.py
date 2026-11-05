@@ -715,5 +715,83 @@ def dashboard(port: Annotated[int, typer.Option(help="Puerto local")] = 8501) ->
                     "--browser.gatherUsageStats", "false"], check=False)  # fmt: skip
 
 
+@app.command()
+def contexto(
+    symbol: Annotated[str, typer.Argument(help="Ticker, p. ej. APP")],
+    vs: Annotated[str, typer.Option(help="Referencias de mercado")] = "SPY,QQQ",
+) -> None:
+    """Contexto en vivo para decidir largo / corto / no operar: VWAP, rangos, tendencia, mercado y stops candidatos."""
+    from datetime import UTC, datetime, timedelta
+    from datetime import time as dtime
+
+    from rich.table import Table
+
+    from daytrader.data.alpaca_client import make_multi_fetcher
+    from daytrader.execution.broker import PaperBroker
+    from daytrader.execution.context import candidate_stops, compute, readings
+    from daytrader.market_calendar import ET, et_to_utc_naive, sessions
+
+    key, secret = Secrets().require_alpaca()
+    sym = symbol.upper()
+    refs = [r.strip().upper() for r in vs.split(",") if r.strip() and r.strip().upper() != sym]
+    now = datetime.now(UTC).replace(tzinfo=None)
+    today = datetime.now(UTC).astimezone(ET).date()
+    s = sessions(today - timedelta(days=40), today)
+    if s.is_empty() or s["session_date"][-1] != today:
+        console.print("Hoy no hay sesión.")
+        return
+    open_utc = s["open_utc"][-1]
+    fetch = make_multi_fetcher(key, secret)
+    until = now - timedelta(minutes=16)  # SIP: el plan gratuito no da los últimos 15 min
+    allsyms = [sym, *refs]
+    bars = fetch(allsyms, "1m", et_to_utc_naive(today, dtime(4)), until)
+    daily = fetch(allsyms, "1d", et_to_utc_naive(s["session_date"][0], dtime(0)),
+                  et_to_utc_naive(today, dtime(0)) - timedelta(minutes=1)).with_columns(
+        pl.col("ts_utc").dt.replace_time_zone("UTC").dt.convert_time_zone("America/New_York").dt.date().alias("session_date"))  # fmt: skip
+    broker = PaperBroker(key, secret)
+
+    def ctx_for(x):
+        q = broker.quote(x)
+        price = q["mid"] or q["ask"] or q["bid"]
+        return compute(x, bars.filter(pl.col("symbol") == x), daily.filter(pl.col("session_date") < today)
+                       .filter(pl.col("symbol") == x), price, open_utc)  # fmt: skip
+
+    c = ctx_for(sym)
+    for r in refs:
+        rc = ctx_for(r)
+        if rc.prev_close and rc.vwap:
+            c.rel[r] = ((rc.price / rc.prev_close - 1) * 100, rc.price > rc.vwap)
+    tab = Table(title=f"Contexto {sym} · {datetime.now(UTC).astimezone(ET):%H:%M} ET", show_header=False)
+    f = lambda v: "—" if v is None else f"{v:,.2f}"  # noqa: E731
+    for k, v in [("Precio actual (IEX)", f(c.price)), ("Cierre de ayer", f(c.prev_close)), ("VWAP del día", f(c.vwap)),
+                 ("Pre-market máx / mín", f"{f(c.pm_high)} / {f(c.pm_low)}"),
+                 ("Rango apertura 5 min", f"{f(c.or_low)} – {f(c.or_high)}"), ("Máx / mín del día", f"{f(c.day_high)} / {f(c.day_low)}"),
+                 ("ATR 14 días", f"{f(c.atr14)} ({c.atr14 / c.price:.1%} del precio)" if c.atr14 else "—")]:  # fmt: skip
+        tab.add_row(k, v)
+    console.print(tab)
+    if c.bars_until:
+        console.print(
+            f"[dim]Barras SIP hasta {c.bars_until.replace(tzinfo=UTC).astimezone(ET):%H:%M} ET (retraso de 15 min del plan gratuito)[/]"
+        )
+    rd = readings(c)
+    console.print("\n[bold]Lecturas[/] (descriptivas, no señales probadas):")
+    for text, lean in rd:
+        mark = {1: "[green]▲ largo[/]", -1: "[red]▼ corto[/]", 0: "[dim]· neutral[/]"}[lean]
+        console.print(f"  {mark}  {text}")
+    up, dn = sum(1 for _, x in rd if x > 0), sum(1 for _, x in rd if x < 0)
+    verdict = (
+        "a favor del LARGO" if up - dn >= 2 else "a favor del CORTO" if dn - up >= 2 else "MIXTO: considera no operar"
+    )
+    console.print(f"\nBalance: {up} ▲ / {dn} ▼ → [bold]{verdict}[/]")
+    for side, name in ((1, "largo"), (-1, "corto")):
+        st_ = candidate_stops(c, side)
+        if st_:
+            txt = " · ".join(f"{n} {v:.2f} ({abs(v / c.price - 1):.2%})" for n, v in st_)
+            console.print(f"  Stops candidatos si vas {name}: {txt}")
+    console.print(
+        "[dim]Recuerda: el stop va donde tu idea queda invalidada; si no lo ves claro, no operar también es una decisión.[/]"
+    )
+
+
 if __name__ == "__main__":
     app()

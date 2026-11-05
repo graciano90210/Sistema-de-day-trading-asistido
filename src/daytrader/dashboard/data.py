@@ -137,3 +137,46 @@ def spy_curve(daily_close: pl.DataFrame, start, end, initial: float = 100_000.0)
         return period
     base = float(before["close"][0]) if before.height else float(period["close"][0])
     return period.select("session_date", (pl.col("close") / base * initial).alias("equity"))
+
+
+# ------------------------------------------------------------------ en vivo (posiciones abiertas)
+def live_positions(positions: list[dict], tickets: pl.DataFrame) -> pl.DataFrame:
+    """Une las posiciones abiertas de Alpaca con su ticket enviado (stop, objetivo, riesgo planificado).
+
+    R actual = PnL flotante / riesgo planificado del ticket. `progreso` = posición del precio entre el stop (0)
+    y el objetivo (1); < 0 significa más allá del stop (la orden de stop debería ejecutarse).
+    """
+    cols = {"símbolo": pl.Utf8, "dirección": pl.Utf8, "acciones": pl.Float64, "entrada": pl.Float64,
+            "precio": pl.Float64, "PnL $": pl.Float64, "R actual": pl.Float64, "stop": pl.Float64,
+            "objetivo": pl.Float64, "a stop (R)": pl.Float64, "progreso": pl.Float64}  # fmt: skip
+    if not positions:
+        return pl.DataFrame(schema=cols)
+    sent = (
+        tickets.filter(pl.col("status") == "enviado").sort("created_at").group_by("symbol").last()
+        if not tickets.is_empty() else pl.DataFrame(schema={"symbol": pl.Utf8})
+    )  # fmt: skip
+    tk = {r["symbol"]: r for r in sent.iter_rows(named=True)} if not sent.is_empty() else {}
+    rows = []
+    for p in positions:
+        qty = float(p["qty"])
+        d = 1 if qty > 0 else -1
+        price = abs(float(p["market_value"]) / qty) if qty else float("nan")
+        t = tk.get(p["symbol"])
+        stop = t["stop_price"] if t else None
+        target = t["target_price"] if t else None
+        rps = abs((t["limit_price"] or t["ref_price"]) - stop) if t else None
+        pnl = float(p["unrealized_pl"])
+        prog = None
+        if stop is not None and target is not None and target != stop:
+            prog = (price - stop) / (target - stop)
+        rows.append({
+            "símbolo": p["symbol"], "dirección": "largo" if d == 1 else "corto", "acciones": abs(qty),
+            "entrada": float(p["avg_entry"]), "precio": price, "PnL $": pnl,
+            "R actual": pnl / (rps * abs(qty)) if rps else None, "stop": stop, "objetivo": target,
+            "a stop (R)": (price - stop) * d / rps if rps else None, "progreso": prog,
+        })  # fmt: skip
+    return pl.DataFrame(rows, schema=cols)
+
+
+def minutes_to(target_utc, now_utc) -> float:
+    return (target_utc - now_utc).total_seconds() / 60

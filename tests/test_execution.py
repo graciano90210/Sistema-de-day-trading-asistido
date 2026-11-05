@@ -158,3 +158,10 @@ def test_journal_allows_concurrent_processes(tmp_path):
     a.event("guard", "autorizado")
     b.record_ticket(ticket(), "enviado")
     assert a.trades_today(NOW.date()) == 1 and b.query("SELECT count(*) AS n FROM events")["n"][0] == 1
+
+
+def test_ticket_session_date_is_new_york_date():
+    late = ticket(now_utc=datetime(2025, 3, 15, 0, 30))  # 20:30 ET del 14 de marzo
+    j = Journal()
+    j.record_ticket(late, "rechazado", ["x"])
+    assert str(j.query("SELECT session_date FROM tickets")["session_date"][0]) == "2025-03-14"

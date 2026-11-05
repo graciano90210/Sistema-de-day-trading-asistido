@@ -36,6 +36,13 @@ def _now() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
 
 
+def _et_date(ts_utc: datetime):
+    """Fecha de sesión = fecha en Nueva York (no UTC): una orden de las 19:30 ET es del mismo día."""
+    from daytrader.market_calendar import ET
+
+    return ts_utc.replace(tzinfo=UTC).astimezone(ET).date()
+
+
 class Journal:
     """Conexión de corta duración por operación (DuckDB admite un solo escritor): varios procesos
     — `guard`, `trade`, `sync` — pueden usar el journal a la vez sin bloquearse entre sí."""
@@ -71,7 +78,7 @@ class Journal:
                       order_id: str | None = None, client_order_id: str | None = None) -> None:  # fmt: skip
         d = ticket_dict(t)
         row = {
-            "fingerprint": d["fingerprint"], "created_at": t.created_at, "session_date": t.created_at.date(),
+            "fingerprint": d["fingerprint"], "created_at": t.created_at, "session_date": _et_date(t.created_at),
             "symbol": t.symbol, "side": t.side, "qty": t.qty, "entry_type": t.entry_type, "ref_price": t.ref_price,
             "limit_price": t.limit_price, "stop_price": t.stop_price, "target_price": t.target_price,
             "risk_usd": t.risk_usd, "setup": t.setup, "catalyst": t.catalyst, "notes": t.notes, "status": status,

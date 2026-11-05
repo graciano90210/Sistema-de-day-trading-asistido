@@ -126,7 +126,83 @@ def breakdowns(t: pl.DataFrame, extra: str | None = None) -> None:
 # ================================================================== UI
 st.title("Day trading asistido")
 st.caption("Cuenta **PAPER** · ningún dato de esta página es dinero real · los números se calculan en Python")
-tab1, tab2, tab3 = st.tabs(["Mi operativa (paper)", "Investigación (backtests)", "Cómo leer esto"])
+tab0, tabw, tab1, tab2, tab3 = st.tabs(
+    [":material/bolt: Hoy, en vivo", ":material/list: Watchlist", ":material/person: Mi operativa (paper)",
+     ":material/science: Investigación (backtests)", ":material/help: Cómo leer esto"]
+)  # fmt: skip
+
+
+@st.cache_resource
+def _broker():
+    from daytrader.config import Secrets
+    from daytrader.execution.broker import PaperBroker
+
+    k, s = Secrets().require_alpaca()
+    return PaperBroker(k, s)
+
+
+@st.fragment(run_every="20s")
+def live_view() -> None:
+    from datetime import UTC, datetime, time, timedelta
+
+    from daytrader.market_calendar import ET, et_to_utc_naive, sessions
+
+    try:
+        b = _broker()
+        acc = b.client.get_account()
+        positions = b.positions()
+    except Exception as exc:  # sin red o sin keys: la página sigue funcionando
+        st.warning(f"No se pudo leer la cuenta paper: {exc}")
+        return
+    _, tickets, _ = D.load_journal(ROOT / "data" / "journal.duckdb")
+    now = datetime.now(UTC).replace(tzinfo=None)
+    today = datetime.now(UTC).astimezone(ET).date()
+    ses = sessions(today, today)
+    eq, last = float(acc.equity), float(acc.last_equity)
+    pnl = eq - last
+    sent_today = 0 if tickets.is_empty() else tickets.filter(
+        (pl.col("session_date") == today) & (pl.col("status") == "enviado")).height  # fmt: skip
+    with st.container(horizontal=True):
+        st.metric("Capital paper", f"${eq:,.2f}", f"{pnl:+,.2f} hoy", border=True)
+        st.metric("Hasta el kill switch (−3%)", f"${pnl + 0.03 * last:,.0f}", border=True,
+                  help="Pérdida adicional del día antes de bloquear nuevas entradas")  # fmt: skip
+        st.metric("Trades hoy", f"{sent_today} / 5", border=True)
+        st.metric("Posiciones abiertas", f"{len(positions)} / 3", border=True)
+        if ses.height:
+            flat = min(et_to_utc_naive(today, time(15, 50)), ses["close_utc"][0] - timedelta(minutes=10))
+            mins = D.minutes_to(flat, now)
+            st.metric("Cierre forzado", "15:50 ET" if mins > 0 else "pasado",
+                      f"en {mins:.0f} min" if mins > 0 else None, delta_color="off", border=True)  # fmt: skip
+    lp = D.live_positions(positions, tickets)
+    if lp.is_empty():
+        st.info("Sin posiciones abiertas.", icon=":material/check_circle:")
+    else:
+        st.dataframe(
+            lp, hide_index=True,
+            column_config={
+                "entrada": st.column_config.NumberColumn(format="%.2f"), "precio": st.column_config.NumberColumn(format="%.2f"),
+                "PnL $": st.column_config.NumberColumn(format="%+.2f"), "R actual": st.column_config.NumberColumn(format="%+.2f R"),
+                "stop": st.column_config.NumberColumn(format="%.2f"), "objetivo": st.column_config.NumberColumn(format="%.2f"),
+                "a stop (R)": st.column_config.NumberColumn(format="%.2f R", help="Cuánto falta para tocar el stop, en R"),
+                "progreso": st.column_config.ProgressColumn("stop → objetivo", min_value=0.0, max_value=1.0,
+                                                           help="0 = en el stop, 100% = en el objetivo"),
+            },
+        )  # fmt: skip
+    st.caption(f"Se actualiza cada 20 s · {datetime.now(UTC).astimezone(ET):%H:%M:%S} ET · precios de Alpaca paper")
+
+
+with tab0:
+    live_view()
+
+with tabw:
+    files = sorted((ROOT / "reports").glob("watchlist_*.md"), reverse=True)
+    if not files:
+        st.info("Aún no hay watchlists. Se generan con `uv run daytrader watchlist --date AAAA-MM-DD` "
+                "o automáticamente a las 09:40 ET.")  # fmt: skip
+    else:
+        pick = st.selectbox("Día", [f.stem.replace("watchlist_", "") for f in files])
+        st.markdown((ROOT / "reports" / f"watchlist_{pick}.md").read_text())
+        st.caption("Para el contexto en vivo de un ticker: `uv run daytrader contexto TICKER`")
 
 with tab1:
     trades, tickets, notes = D.load_journal(ROOT / "data" / "journal.duckdb")

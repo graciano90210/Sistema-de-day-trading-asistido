@@ -45,3 +45,23 @@ def test_spy_curve_buys_at_previous_close():
     )
     c = D.spy_curve(spy, date(2025, 1, 2), date(2025, 1, 3))
     assert c["equity"].to_list() == pytest.approx([110_000.0, 99_000.0])
+
+
+def test_live_positions_r_and_progress():
+    tickets = pl.DataFrame({
+        "symbol": ["SPY", "QQQ"], "status": ["enviado", "enviado"],
+        "created_at": [datetime(2026, 11, 5, 19, 40), datetime(2026, 11, 5, 19, 47)],
+        "stop_price": [733.54, 659.93], "target_price": [744.61, 650.08],
+        "limit_price": [None, None], "ref_price": [736.98, 656.65],
+    }, schema_overrides={"limit_price": pl.Float64})  # fmt: skip
+    pos = [{"symbol": "SPY", "qty": 29.0, "avg_entry": 737.18, "market_value": 29 * 740.0, "unrealized_pl": 81.78},
+           {"symbol": "QQQ", "qty": -30.0, "avg_entry": 656.50, "market_value": -30 * 655.0, "unrealized_pl": 45.0}]  # fmt: skip
+    lp = D.live_positions(pos, tickets)
+    spy = lp.row(0, named=True)
+    assert spy["dirección"] == "largo" and spy["precio"] == pytest.approx(740.0)
+    assert spy["R actual"] == pytest.approx(81.78 / (3.44 * 29))
+    assert spy["a stop (R)"] == pytest.approx((740.0 - 733.54) / 3.44)
+    assert spy["progreso"] == pytest.approx((740.0 - 733.54) / (744.61 - 733.54))
+    qqq = lp.row(1, named=True)
+    assert qqq["dirección"] == "corto" and qqq["a stop (R)"] == pytest.approx((655.0 - 659.93) * -1 / 3.28)
+    assert D.live_positions([], tickets).is_empty()

@@ -219,3 +219,26 @@ def test_universe_first_day_has_no_today_data(scan_store):
 
     uni, _ = stage1(scan_store, D, CFG["universe"], as_of)
     assert (uni["prev_date"] < D).all()
+
+
+def test_universe_daily_ingest_is_incremental(store):
+    from daytrader.scanner.universe import ingest_universe_daily
+
+    calls = []
+
+    def fake(symbols, tf, a, b):
+        calls.append((tuple(symbols), a.date()))
+        days = previous_sessions(b.date(), 3)
+        return pl.DataFrame(
+            [{"symbol": s, "ts_utc": et_to_utc_naive(d, time(0)), "open": 10.0, "high": 11.0, "low": 9.0,
+              "close": 10.5, "volume": 1e6, "trade_count": 10, "vwap": 10.2} for s in symbols for d in days
+             if a.date() <= d < b.date()],
+            schema_overrides={"ts_utc": pl.Datetime("us")},
+        )  # fmt: skip
+
+    start = date(2025, 3, 3)
+    ingest_universe_daily(store, fake, ["AAA", "BBB"], start, date(2025, 3, 14), "test")
+    ingest_universe_daily(store, fake, ["AAA", "BBB"], start, date(2025, 3, 14), "test")  # nada nuevo
+    assert len(calls) == 1
+    ingest_universe_daily(store, fake, ["AAA", "BBB"], start, date(2025, 3, 15), "test")  # un día más
+    assert len(calls) == 2 and calls[1][1] == date(2025, 3, 14)  # solo desde lo ya cubierto

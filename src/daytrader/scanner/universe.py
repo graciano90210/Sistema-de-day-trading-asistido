@@ -60,31 +60,42 @@ def ingest_universe_daily(
     batch_size: int = 200,
     on_batch: Callable[[int, int], None] | None = None,
 ) -> tuple[int, int]:
-    """Barras diarias [start, end) para muchos símbolos. Reutiliza ingest_log ('1d', start, end)."""
-    done = set(
-        store.query(
-            "SELECT symbol FROM ingest_log WHERE timeframe = '1d' AND status = 'ok' AND chunk_start = ? AND chunk_end = ?",
-            [start, end],
-        )["symbol"].to_list()
+    """Barras diarias [start, end) para muchos símbolos, INCREMENTAL: cada símbolo descarga solo desde
+    el final de lo que ya tiene (ingest_log '1d' ok) hasta `end`. La primera vez, el rango completo."""
+    have = store.query(
+        "SELECT symbol, max(chunk_end) AS until FROM ingest_log WHERE timeframe = '1d' AND status = 'ok' "
+        "AND chunk_start <= ? GROUP BY 1",
+        [start],
     )
-    todo = [s for s in symbols if s not in done]
-    rows = errors = 0
-    for i in range(0, len(todo), batch_size):
-        batch = todo[i : i + batch_size]
-        try:
-            raw = fetch_many(batch, "1d", et_to_utc_naive(start, time(0)), et_to_utc_naive(end, time(0)))
-            df = prepare_bars(raw, "1d", feed).filter(pl.col("session_date") < end)
-            rows += store.upsert_bars(df, "1d")
-            counts = dict(df.group_by("symbol").len().iter_rows())
-            for s in batch:
-                store.log_chunk(s, "1d", start, end, counts.get(s, 0), "ok")
-        except Exception as exc:
-            log.error("Lote %d falló: %s", i, exc)
-            errors += 1
-            for s in batch:
-                store.log_chunk(s, "1d", start, end, 0, "error", str(exc)[:300])
-        if on_batch:
-            on_batch(min(i + batch_size, len(todo)), len(todo))
+    covered: dict[str, date] = dict(have.iter_rows())
+    # Agrupar por fecha de inicio de descarga (casi todos comparten la misma: el último día ya cubierto)
+    groups: dict[date, list[str]] = {}
+    for s in symbols:
+        frm = max(start, covered.get(s, start))
+        if frm < end:
+            groups.setdefault(frm, []).append(s)
+    total = sum(len(v) for v in groups.values())
+    rows = errors = done = 0
+    for frm, syms in sorted(groups.items()):
+        for i in range(0, len(syms), batch_size):
+            batch = syms[i : i + batch_size]
+            try:
+                raw = fetch_many(batch, "1d", et_to_utc_naive(frm, time(0)), et_to_utc_naive(end, time(0)))
+                df = prepare_bars(raw, "1d", feed).filter(
+                    pl.col("session_date").is_between(frm, end - timedelta(days=1))
+                )
+                rows += store.upsert_bars(df, "1d")
+                counts = dict(df.group_by("symbol").len().iter_rows())
+                for s in batch:
+                    store.log_chunk(s, "1d", frm, end, counts.get(s, 0), "ok")
+            except Exception as exc:
+                log.error("Lote %s/%d falló: %s", frm, i, exc)
+                errors += 1
+                for s in batch:
+                    store.log_chunk(s, "1d", frm, end, 0, "error", str(exc)[:300])
+            done += len(batch)
+            if on_batch:
+                on_batch(done, total)
     return rows, errors
 
 
