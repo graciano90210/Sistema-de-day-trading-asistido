@@ -13,3 +13,8 @@ no_entries_first_minutes: 0   # opcional: esperar N min tras la apertura
 flatten_et: "15:50"           # cierre total antes del final de la sesión
 confirm_timeout_s: 60         # la confirmación y/n caduca
 max_price_drift_r: 0.25       # se cancela si el precio se movió > 0,25 R entre el ticket y la confirmación
+
+# --- Práctica con el tamaño real (pedido del usuario, 2026-11-05) ---
+simulated_capital: 3000       # el sistema dimensiona como si la cuenta tuviera $3.000 (null = capital paper real)
+simulated_start: "2026-11-06" # desde esta fecha, el PnL realizado del journal se suma al capital simulado
+account_type: cash            # efectivo: sin cortos ni apalancamiento, pero sin límite PDT de day trades

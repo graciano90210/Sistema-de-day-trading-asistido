@@ -149,7 +149,6 @@ def live_view() -> None:
 
     try:
         b = _broker()
-        acc = b.client.get_account()
         positions = b.positions()
     except Exception as exc:  # sin red o sin keys: la página sigue funcionando
         st.warning(f"No se pudo leer la cuenta paper: {exc}")
@@ -158,13 +157,21 @@ def live_view() -> None:
     now = datetime.now(UTC).replace(tzinfo=None)
     today = datetime.now(UTC).astimezone(ET).date()
     ses = sessions(today, today)
-    eq, last = float(acc.equity), float(acc.last_equity)
+    from daytrader.config import load_yaml
+    from daytrader.execution.journal import Journal
+    from daytrader.execution.risk import RiskConfig
+    from daytrader.execution.simulated import from_broker
+
+    rcfg = RiskConfig(**load_yaml("risk.yaml"))
+    sim = from_broker(b, Journal(ROOT / "data" / "journal.duckdb"), rcfg, today)
+    eq, last = sim.equity, sim.last_equity
     pnl = eq - last
     sent_today = 0 if tickets.is_empty() else tickets.filter(
         (pl.col("session_date") == today) & (pl.col("status") == "enviado")).height  # fmt: skip
     with st.container(horizontal=True):
-        st.metric("Capital paper", f"${eq:,.2f}", f"{pnl:+,.2f} hoy", border=True)
-        st.metric("Hasta el kill switch (−3%)", f"${pnl + 0.03 * last:,.0f}", border=True,
+        st.metric("Capital simulado" if rcfg.simulated_capital else "Capital paper", f"${eq:,.2f}", f"{pnl:+,.2f} hoy",
+                  border=True, help="Tamaño real de práctica (config/risk.yaml)" if rcfg.simulated_capital else None)  # fmt: skip
+        st.metric("Hasta el kill switch (−3%)", f"${pnl + rcfg.daily_loss_limit * last:,.2f}", border=True,
                   help="Pérdida adicional del día antes de bloquear nuevas entradas")  # fmt: skip
         st.metric("Trades hoy", f"{sent_today} / 5", border=True)
         st.metric("Posiciones abiertas", f"{len(positions)} / 3", border=True)

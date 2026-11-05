@@ -506,6 +506,12 @@ def _exec_ctx():
     return cfg, rcfg, PaperBroker(key, secret), Journal(cfg.db_path.parent / "journal.duckdb"), ses, now, today
 
 
+def _acct(broker, journal, rcfg, today):
+    from daytrader.execution.simulated import from_broker
+
+    return from_broker(broker, journal, rcfg, today)
+
+
 def _show_ticket(t) -> None:
     from rich.table import Table
 
@@ -557,7 +563,7 @@ def trade(
     ref = q["ask"] if side_n == "long" else q["bid"]
     ref = ref or q["mid"]
     console.print(f"[dim]Cotización IEX {symbol.upper()}: bid {q['bid']:.2f} · ask {q['ask']:.2f}[/]")
-    acc = broker.account_state(journal.trades_today(today))
+    acc = _acct(broker, journal, rcfg, today)
     t = build_ticket(symbol, side_n, ref, stop, target, acc, rcfg, now, "limit" if limit else "market", limit,
                      setup, catalyst, notes)  # fmt: skip
 
@@ -578,9 +584,10 @@ def trade(
 def positions() -> None:
     """Posiciones abiertas y estado del día en la cuenta PAPER."""
     cfg, rcfg, broker, journal, ses, now, today = _exec_ctx()
-    acc = broker.account_state(journal.trades_today(today))
+    acc = _acct(broker, journal, rcfg, today)
     pnl = acc.equity - acc.last_equity
-    console.print(f"Capital ${acc.equity:,.2f} · PnL del día {pnl:+,.2f} ({pnl / acc.last_equity:+.2%}) · "
+    sim = " (simulado, cuenta de efectivo)" if rcfg.simulated_capital else ""
+    console.print(f"Capital{sim} ${acc.equity:,.2f} · PnL del día {pnl:+,.2f} ({pnl / acc.last_equity:+.2%}) · "
                   f"trades hoy {acc.trades_today}/{rcfg.max_trades_per_day} · kill switch en {-rcfg.daily_loss_limit:.0%}")  # fmt: skip
     for p in broker.positions():
         console.print(
@@ -613,7 +620,17 @@ def guard() -> None:
             "[yellow]Sin autorización: guard solo vigilará; deberás cerrar manualmente con 'daytrader flatten'.[/]"
         )
     journal.event("guard_autorizacion", str(ans))
+    last_entry = ses.close_utc - _td(minutes=rcfg.no_entries_last_minutes)
+    cancelled = False
     while datetime.now(UTC).replace(tzinfo=None) < flat_at:
+        if not cancelled and datetime.now(UTC).replace(tzinfo=None) >= last_entry:
+            n = broker.cancel_pending_entries()  # una orden límite no debe ejecutarse en los últimos 15 min
+            journal.event("cancelar_entradas_pendientes", str(n))
+            if n:
+                console.print(
+                    f"[yellow]Canceladas {n} órdenes de entrada pendientes (última entrada {rcfg.no_entries_last_minutes} min antes del cierre).[/]"
+                )
+            cancelled = True
         _t.sleep(15)
     if ans == "y":
         broker.flatten()

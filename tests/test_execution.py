@@ -165,3 +165,31 @@ def test_ticket_session_date_is_new_york_date():
     j = Journal()
     j.record_ticket(late, "rechazado", ["x"])
     assert str(j.query("SELECT session_date FROM tickets")["session_date"][0]) == "2025-03-14"
+
+
+# ---------------- Capital simulado y cuenta de efectivo ----------------
+CASH = RiskConfig(simulated_capital=1000, simulated_start="2026-11-06", account_type="cash")
+
+
+def test_simulated_state_tracks_journal_pnl():
+    from daytrader.execution.simulated import account_state
+
+    a = account_state(100_050, 100_000, 1, 500, 1, 500, realized_before_today=25.0, cfg=CASH)
+    assert a.last_equity == 1025.0 and a.equity == 1075.0  # 1000 + 25 realizado + 50 del día
+    real = account_state(100_050, 100_000, 0, 0, 0, 0, 0.0, RiskConfig())
+    assert real.equity == 100_050
+
+
+def test_cash_account_rules_with_1000_dollars():
+    acc = AccountState(equity=1000, last_equity=1000, open_positions=0, open_notional=0, trades_today=0)
+    t = build_ticket("XYZ", "long", 50.0, 48.0, 54.0, acc, CASH, NOW)
+    assert t.qty == 5 and t.risk_usd == 10.0  # 1% de $1.000 / $2 por acción
+    assert check(t, acc, SES, CASH, NOW).ok
+    spy = build_ticket("SPY", "long", 737.0, 733.5, 744.0, acc, CASH, NOW)
+    assert spy.qty == 1  # recortado por nocional (no hay apalancamiento)
+    short = build_ticket("XYZ", "short", 50.0, 52.0, 46.0, acc, CASH, NOW)
+    assert any("corto" in r for r in check(short, acc, SES, CASH, NOW).reasons)
+    used = replace(acc, day_notional_used=800)  # fondos ya usados hoy
+    assert any("fondos liquidados" in r for r in check(t, used, SES, CASH, NOW).reasons)
+    kill = replace(acc, equity=969.0)  # -3,1% del capital simulado
+    assert any("KILL SWITCH" in r for r in check(t, kill, SES, CASH, NOW).reasons)

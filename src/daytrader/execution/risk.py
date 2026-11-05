@@ -30,6 +30,10 @@ class RiskConfig:
     flatten_et: str = "15:50"
     confirm_timeout_s: int = 60
     max_price_drift_r: float = 0.25
+    # Capital con el que se practica (None = capital real de la cuenta paper). Evoluciona con el PnL del journal.
+    simulated_capital: float | None = None
+    simulated_start: str | None = None  # AAAA-MM-DD: desde cuándo se acumula el PnL al capital simulado
+    account_type: str = "margin"  # cash | margin. Cash (< $2.000 en EE. UU.): sin cortos, sin apalancamiento
 
 
 @dataclass(frozen=True)
@@ -39,6 +43,7 @@ class AccountState:
     open_positions: int
     open_notional: float
     trades_today: int
+    day_notional_used: float = 0.0  # nocional ya comprado hoy (cuenta de efectivo: fondos liquidados)
 
 
 @dataclass(frozen=True)
@@ -140,6 +145,13 @@ def check(
             r.append(f"stop demasiado lejos ({dist:.2%} > {cfg.max_stop_distance_pct:.2%})")
     if ticket.target_price is not None and (ticket.target_price - entry) * d <= 0:
         r.append("objetivo del lado incorrecto")
+    # Cuenta de efectivo: sin cortos ni apalancamiento; cada dólar se usa una vez al día (fondos liquidados)
+    if cfg.account_type == "cash":
+        if ticket.side == "short":
+            r.append("cuenta de efectivo: no se permite vender en corto (requiere margen, mínimo $2.000)")
+        if account.day_notional_used + ticket.notional > account.equity * 1.001:
+            r.append(f"cuenta de efectivo: nocional ${ticket.notional:,.2f} + ya usado hoy ${account.day_notional_used:,.2f} "
+                     f"> capital ${account.equity:,.2f} (fondos liquidados)")  # fmt: skip
     # Riesgo por trade
     if ticket.risk_usd > cfg.risk_per_trade * account.equity * 1.001:
         r.append(f"riesgo ${ticket.risk_usd:,.2f} > {cfg.risk_per_trade:.0%} del capital")
@@ -151,8 +163,9 @@ def check(
         r.append(f"máximo de {cfg.max_trades_per_day} trades por día alcanzado")
     if account.open_positions >= cfg.max_positions:
         r.append(f"máximo de {cfg.max_positions} posiciones abiertas")
-    if account.open_notional + ticket.notional > cfg.buying_power_mult * account.equity:
-        r.append("excede el poder de compra (4× capital)")
+    mult = 1.0 if cfg.account_type == "cash" else cfg.buying_power_mult
+    if account.open_notional + ticket.notional > mult * account.equity:
+        r.append(f"excede el poder de compra ({mult:g}× capital)")
     if ticket.notional > cfg.max_position_pct * account.equity * 1.001:
         r.append("nocional de la posición > límite por posición")
     # Horario

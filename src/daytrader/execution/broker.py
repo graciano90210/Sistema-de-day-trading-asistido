@@ -87,6 +87,16 @@ class PaperBroker:
                else MarketOrderRequest(**common))  # fmt: skip
         return self.client.submit_order(req)
 
+    def cancel_pending_entries(self) -> int:
+        """Cancela órdenes de ENTRADA del sistema (prefijo dt-) que aún no se ejecutaron. Devuelve cuántas."""
+        n = 0
+        for o in self.client.get_orders(GetOrdersRequest(status=QueryOrderStatus.OPEN, nested=True)):
+            filled = float(o.filled_qty or 0)
+            if str(o.client_order_id or "").startswith("dt-") and filled == 0:
+                self.client.cancel_order_by_id(o.id)
+                n += 1
+        return n
+
     def flatten(self):
         """Cancela órdenes abiertas y cierra todas las posiciones (requiere autorización previa del usuario)."""
         return self.client.close_all_positions(cancel_orders=True)

@@ -108,6 +108,24 @@ class Journal:
                 "SELECT count(*) FROM tickets WHERE session_date = ? AND status = 'enviado'", [day]
             ).fetchall()[0][0]
 
+    def realized_pnl(self, since, before) -> float:
+        """PnL realizado de trades cerrados con since <= session_date < before."""
+        with self._c() as con:
+            v = con.execute(
+                "SELECT coalesce(sum(pnl), 0) FROM trades WHERE session_date >= ? AND session_date < ?", [since, before]
+            ).fetchall()[0][0]
+        return float(v)
+
+    def notional_today(self, day) -> float:
+        """Nocional de las entradas enviadas hoy (precio de referencia o límite × acciones)."""
+        with self._c() as con:
+            v = con.execute(
+                "SELECT coalesce(sum(qty * coalesce(limit_price, ref_price)), 0) FROM tickets "
+                "WHERE session_date = ? AND status = 'enviado'",
+                [day],
+            ).fetchall()[0][0]
+        return float(v)
+
     def upsert_trade(self, row: dict) -> None:
         df = pl.DataFrame([{**row, "synced_at": _now()}])
         with self._c() as con:
