@@ -356,6 +356,52 @@ def round2(
 
 
 @app.command()
+def round3() -> None:
+    """Ronda 3 pre-registrada: VWAP con órdenes límite + ajuste walk-forward → reports/ronda3_IS.md"""
+    import glob
+
+    from daytrader.backtest.metrics import daily_sharpe, deflated_sharpe
+    from daytrader.backtest.runner import session_list
+    from daytrader.config import ROOT, load_yaml
+    from daytrader.research.regime import predicted_vol_prob
+    from daytrader.research.report3 import render
+    from daytrader.research.round2 import promotion, run_round2, trial_sharpes_round1
+    from daytrader.research.round3 import run_round3
+
+    logging.basicConfig(level=logging.WARNING)
+    cfg, bt, strat, scfg = (
+        load_config(),
+        load_yaml("backtest.yaml"),
+        load_yaml("strategies.yaml"),
+        load_yaml("scanner.yaml"),
+    )
+    key, secret = Secrets().require_alpaca()
+    holdout = date.fromisoformat(bt["holdout_start"])
+    d0, d1 = date.fromisoformat(bt["in_sample_start"]), holdout - timedelta(days=1)
+    spy_long = pl.read_parquet(ROOT / "data" / "spy_daily_2016.parquet").filter(pl.col("session_date") < holdout)
+    with Store(cfg.db_path, read_only=True) as store:
+        with console.status("Ronda 3: rejilla de órdenes límite…"):
+            pvol = predicted_vol_prob(spy_long, session_list(d0, d1))
+            res = run_round3(store, bt, strat, scfg, load_universe(), pvol, (key, secret), d0, d1)
+        with console.status("Sharpe de los 13 intentos previos (para el DSR)…"):
+            r1 = [f for f in sorted(glob.glob(str(ROOT / "data" / "backtests" / "*__20*-12-03_2025-12-31.parquet")))
+                  if any(s in f for s in ("orb_5__", "orb_15__", "vwap_rev__"))]  # fmt: skip
+            prev = trial_sharpes_round1(store, bt, r1)
+            r2 = run_round2(store, bt, strat, scfg, load_universe(), spy_long, 0.695, None, d0, d1)
+            prev += [daily_sharpe(r["_eq"]) for r in r2["rows"]]
+    sharpes = prev + [daily_sharpe(g["_eq"]) for g in res["grid"]]
+    wf = res["wf"]
+    wf["dsr"] = deflated_sharpe(wf["_eq"]["ret"].fill_null(0.0).to_numpy(), sharpes)
+    wf["pasa"] = promotion(wf)
+    (cfg.reports_path / "ronda3_IS.md").write_text(render(res, d0, d1))
+    console.print(f"Walk-forward: trades={wf['trades']} R={wf['R_neto'] or 0:+.3f} PF={wf['profit_factor'] or 0:.2f} "
+                  f"t={wf['t_stat'] or 0:.2f} DSR={wf['dsr']:.2f} pesimista={wf['R_pesimista'] or 0:+.3f} "
+                  f"{'PASA' if wf['pasa'] else 'NO PASA'}")  # fmt: skip
+    console.print(f"N intentos usados en el DSR: {len(sharpes)}")
+    console.print(f"Reporte: {cfg.reports_path / 'ronda3_IS.md'}")
+
+
+@app.command()
 def backtest(
     strategies: Annotated[
         str, typer.Option(help="Variantes de config/strategies.yaml, coma-separadas")

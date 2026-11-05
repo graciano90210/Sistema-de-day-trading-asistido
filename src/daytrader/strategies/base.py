@@ -56,6 +56,8 @@ class Signal:
     entry_level: float | None = None
     stop_offset: float | None = None  # stop = precio ejecutado ∓ stop_offset (si se define, reemplaza a `stop`)
     valid_until: datetime | None = None
+    # Orden límite de entrada (ronda 3): L = ref_price − lado × limit_offset_hs × medio spread estimado.
+    limit_offset_hs: float | None = None
 
     @property
     def planned_risk(self) -> float:
@@ -70,6 +72,7 @@ StrategyFn = Callable[[pl.DataFrame, DayContext, dict], list[Signal]]
 def get_strategy(kind: str) -> StrategyFn:
     from daytrader.strategies.orb import orb
     from daytrader.strategies.orb_stop import orb_stop
+    from daytrader.strategies.vwap_limit import vwap_limit
     from daytrader.strategies.vwap_reversion import vwap_reversion
 
-    return {"orb": orb, "orb_stop": orb_stop, "vwap_reversion": vwap_reversion}[kind]
+    return {"orb": orb, "orb_stop": orb_stop, "vwap_reversion": vwap_reversion, "vwap_limit": vwap_limit}[kind]

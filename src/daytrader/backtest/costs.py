@@ -28,6 +28,12 @@ class CostModel:
     def from_cfg(cls, costs: dict, execution: dict) -> CostModel:
         return cls(**costs, stop_slippage_mult=execution.get("stop_slippage_mult", 1.5))
 
+    def half_spread(self, prior_high: np.ndarray, prior_low: np.ndarray, k: float | None = None) -> float:
+        """Medio spread estimado = k × mediana(high−low) de las barras previas (mín. medio tick)."""
+        h, lo = prior_high[-self.lookback_bars :], prior_low[-self.lookback_bars :]
+        rng = float(np.median(h - lo)) if len(h) else 0.0
+        return max(self.min_half_spread, (self.half_spread_k if k is None else k) * rng)
+
     def slippage_per_share(
         self, price: float, prior_high: np.ndarray, prior_low: np.ndarray, prior_close: np.ndarray,
         prior_volume: np.ndarray, shares: int,

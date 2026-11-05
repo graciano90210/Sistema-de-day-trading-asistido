@@ -220,3 +220,46 @@ def test_hmm_regime_is_point_in_time():
     jb = b.filter(pl.col("session_date") <= cut)["p_vol"].to_list()
     assert np.allclose(ja, jb)
     assert a["p_vol"].is_between(0, 1).all()
+
+
+# ---------------- Órdenes límite de entrada (ronda 3) ----------------
+NOHS = CostModel(commission_per_share=0, sec_fee_rate=0, taf_per_share=0, min_half_spread=0.0, half_spread_k=0,
+                 impact_k=0)  # fmt: skip
+
+
+def lim_sig(side=1, ref=100.0, stop=98.0, target=103.0, w=3, m=0.0):
+    return Signal("AAA", D, "t", side, T0, T0 + timedelta(minutes=1), ref, stop, target, timedelta(minutes=60),
+                  entry_type="limit", limit_offset_hs=m, valid_until=T0 + timedelta(minutes=1 + w))  # fmt: skip
+
+
+def test_limit_requires_trade_through_strictly():
+    touch = bars([FLAT, (100.2, 100.4, 100.0, 100.1)] + [(100.2, 100.4, 100.05, 100.2)] * 6)  # low == L: no
+    assert simulate(lim_sig(), touch, NOHS, EOD, 100) is None
+    through = bars([FLAT, (100.2, 100.4, 99.9, 100.1)] + [FLAT] * 6)
+    t = simulate(lim_sig(), through, NOHS, EOD, 100)
+    assert t.entry_px == 100.0 and t.entry_ts == T0 + timedelta(minutes=1) and t.planned_risk == 2.0
+
+
+def test_limit_gap_fills_at_better_open_and_expires():
+    gap = bars([FLAT, (99.0, 99.5, 98.8, 99.2)] + [FLAT] * 6)
+    assert simulate(lim_sig(), gap, NOHS, EOD, 100).entry_px == 99.0
+    late = bars([FLAT] + [(100.2, 100.4, 100.1, 100.3)] * 3 + [(100.0, 100.1, 99.5, 99.8)] * 4)
+    assert simulate(lim_sig(w=3), late, NOHS, EOD, 100) is None  # se ejecutaría en el minuto 4: ya caducó
+
+
+def test_limit_offset_uses_estimated_half_spread():
+    pre = [(100, 100.5, 99.5, 100)] * 30  # rango 1.0 → medio spread k=0.10 → 0.10
+    b = bars(pre + [(100.0, 100.1, 99.85, 99.95)] + [FLAT] * 5)
+    s = Signal("AAA", D, "t", 1, T0, T0 + timedelta(minutes=30), 100.0, 98.0, 103.0, None,
+               entry_type="limit", limit_offset_hs=1.0, valid_until=T0 + timedelta(minutes=35))  # fmt: skip
+    t = simulate(s, b, FREE, EOD, 100)
+    assert t.entry_px == pytest.approx(99.9) and t.planned_risk == pytest.approx(1.9)
+
+
+def test_limit_target_and_stop_exits():
+    b = bars([FLAT, (100.2, 100.4, 99.9, 100.1), (100.1, 103.5, 100.0, 103.2)] + [FLAT] * 3)
+    t = simulate(lim_sig(), b, NOHS, EOD, 100)
+    assert t.exit_reason == "target" and t.exit_px == 103.0 and t.r_net == pytest.approx(1.5)
+    b = bars([FLAT, (100.2, 100.4, 99.9, 100.1), (99.0, 99.2, 97.0, 97.5)] + [FLAT] * 3)
+    t = simulate(lim_sig(), b, NOHS, EOD, 100)
+    assert t.exit_reason == "stop" and t.exit_px == 98.0

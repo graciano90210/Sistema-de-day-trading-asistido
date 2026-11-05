@@ -55,7 +55,9 @@ def calibrate(
     return pl.DataFrame(rows)
 
 
-def entry_then_stop_probability(trades: pl.DataFrame, api_key: str, secret: str, n: int = 200, seed: int = 7) -> dict:
+def entry_then_stop_probability(
+    trades: pl.DataFrame, api_key: str, secret: str, n: int = 200, seed: int = 7, kind: str = "stop_entry"
+) -> dict:
     """Pre-registro ronda 2: en barras de entrada ambiguas (tocan nivel y stop), ¿qué ocurrió primero?
 
     Con los trades tick SIP del minuto de entrada: se busca el primer print que alcanza el precio de
@@ -75,8 +77,13 @@ def entry_then_stop_probability(trades: pl.DataFrame, api_key: str, secret: str,
         )  # fmt: skip
         ticks = (with_retries(lambda req=req: client.get_stock_trades(req), 3) or {}).get(r["symbol"], [])
         px = [x["p"] for x in ticks]
-        side, fill_raw = r["side"], r["entry_px"] - r["side"] * r["slippage_ps"]
-        trig = next((k for k, p in enumerate(px) if (p >= fill_raw if side == 1 else p <= fill_raw)), None)
+        side = r["side"]
+        if kind == "limit":  # compra límite: se ejecuta cuando se imprime a/por debajo del precio de ejecución
+            fill = r["entry_px"]
+            trig = next((k for k, p in enumerate(px) if (p <= fill if side == 1 else p >= fill)), None)
+        else:
+            fill_raw = r["entry_px"] - side * r["slippage_ps"]
+            trig = next((k for k, p in enumerate(px) if (p >= fill_raw if side == 1 else p <= fill_raw)), None)
         if trig is None:
             continue
         total += 1

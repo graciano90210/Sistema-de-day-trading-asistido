@@ -56,6 +56,8 @@ def simulate(
     """`bars`: barras RTH del símbolo en la sesión (todas; el motor solo mira hacia delante tras entrar)."""
     if sig.entry_type == "stop":
         return simulate_stop_entry(sig, bars, costs, eod_exit, ref_risk_dollars)
+    if sig.entry_type == "limit":
+        return simulate_limit_entry(sig, bars, costs, eod_exit, ref_risk_dollars)
     ts = bars["ts_utc"].to_list()
     o, h, lo, c, v = (bars[x].to_numpy() for x in ("open", "high", "low", "close", "volume"))
     i0 = next((i for i, t in enumerate(ts) if t >= sig.decided_at), None)
@@ -170,6 +172,82 @@ def simulate_stop_entry(
         stop=float(stop), target=None, shares=shares, planned_risk=off, slippage_ps=float(slip), fees=float(fees),
         pnl=float(pnl), r_gross=float(r_gross), r_net=float(pnl / (shares * off)), ambiguous=ambiguous,
         r_net_opt=float(opt[3] / (shares * off)), pnl_opt=float(opt[3]),
+    )  # fmt: skip
+
+
+LIMIT_PRICE_K = 0.10  # k calibrado con NBBO: el precio límite no depende del escenario de costos (pre-registro)
+
+
+def simulate_limit_entry(
+    sig: Signal, bars: pl.DataFrame, costs: CostModel, eod_exit: datetime, ref_risk_dollars: float
+) -> Trade | None:
+    """Orden límite de entrada (ronda 3). Ejecución solo por trade-through: compra si low < L (estricto),
+    venta si high > L, dentro de [decided_at, valid_until). Precio = L o la apertura si la barra abrió más allá.
+    Stop a mercado (slippage ×mult), objetivo límite (solo si se supera), stop por tiempo desde la ejecución.
+    """
+    ts = bars["ts_utc"].to_list()
+    o, h, lo, c, v = (bars[x].to_numpy() for x in ("open", "high", "low", "close", "volume"))
+    side = sig.side
+    i_start = next((i for i, t in enumerate(ts) if t >= sig.decided_at), None)
+    if i_start is None or ts[i_start] >= eod_exit:
+        return None
+    prior = slice(0, i_start)
+    hs = costs.half_spread(h[prior], lo[prior], k=LIMIT_PRICE_K)
+    limit = sig.ref_price - side * float(sig.limit_offset_hs or 0.0) * hs
+    planned = (limit - sig.stop) * side
+    if planned <= 0:
+        return None
+    shares = int(math.floor(ref_risk_dollars / planned))
+    if shares < 1:
+        return None
+    valid_until = min(sig.valid_until or eod_exit, eod_exit)
+    j = None
+    for i in range(i_start, len(ts)):
+        if ts[i] >= valid_until:
+            break
+        if (side == 1 and lo[i] < limit) or (side == -1 and h[i] > limit):
+            j = i
+            break
+    if j is None:
+        return None
+    fill = float(min(limit, o[j]) if side == 1 else max(limit, o[j]))
+    slip = costs.slippage_per_share(fill, h[prior], lo[prior], c[prior], v[prior], shares)
+    deadline = eod_exit if sig.max_hold is None else min(eod_exit, ts[j] + sig.max_hold)
+
+    def run(skip_entry_bar_touch: bool):
+        for i in range(j, len(ts)):
+            if i > j and ts[i] >= deadline:
+                return float(o[i]), ts[i], "eod" if deadline == eod_exit else "time", slip
+            touched = lo[i] <= sig.stop if side == 1 else h[i] >= sig.stop
+            if i == j:
+                if (c[i] - sig.stop) * side <= 0 or (touched and not skip_entry_bar_touch):
+                    return sig.stop, ts[i], "stop", slip * costs.stop_slippage_mult
+                continue
+            if touched:
+                raw = float(min(o[i], sig.stop) if side == 1 else max(o[i], sig.stop))
+                return raw, ts[i], "stop", slip * costs.stop_slippage_mult
+            if sig.target is not None and (h[i] > sig.target if side == 1 else lo[i] < sig.target):
+                return sig.target, ts[i], "target", 0.0
+        return float(c[-1]), ts[-1], "eod", slip
+
+    def outcome(res):
+        raw_exit, exit_ts, reason, exit_slip = res
+        exit_px = raw_exit - side * exit_slip
+        fees = costs.fees(shares, fill, exit_px, side)
+        pnl = (exit_px - fill) * side * shares - fees
+        return exit_px, exit_ts, reason, pnl, (raw_exit - fill) * side / planned, fees
+
+    cons = outcome(run(False))
+    touched0 = lo[j] <= sig.stop if side == 1 else h[j] >= sig.stop
+    ambiguous = bool(touched0 and (c[j] - sig.stop) * side > 0)
+    opt = outcome(run(True)) if ambiguous else cons
+    exit_px, exit_ts, reason, pnl, r_gross, fees = cons
+    return Trade(
+        symbol=sig.symbol, session_date=sig.session_date, strategy=sig.strategy, side=side, signal_ts=sig.signal_ts,
+        entry_ts=ts[j], entry_px=fill, exit_ts=exit_ts, exit_px=float(exit_px), exit_reason=reason, stop=sig.stop,
+        target=sig.target, shares=shares, planned_risk=planned, slippage_ps=float(slip), fees=float(fees),
+        pnl=float(pnl), r_gross=float(r_gross), r_net=float(pnl / (shares * planned)), ambiguous=ambiguous,
+        r_net_opt=float(opt[3] / (shares * planned)), pnl_opt=float(opt[3]),
     )  # fmt: skip
 
 
