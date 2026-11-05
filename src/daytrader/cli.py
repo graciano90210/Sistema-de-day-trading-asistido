@@ -725,7 +725,7 @@ def note(
 
 @app.command()
 def historia(
-    paso: Annotated[str, typer.Option(help="copiar, splits, diarias, universo, minutos o todo")] = "todo",
+    paso: Annotated[str, typer.Option(help="copiar, splits, diarias, benchmarks, universo, minutos o todo")] = "todo",
     top: Annotated[int, typer.Option(help="Tamaño del universo point-in-time por año")] = 100,
 ) -> None:
     """Fase 7: historia 2015–2025 en data/history.duckdb (incremental; no toca market.duckdb salvo para leer)."""
@@ -739,7 +739,7 @@ def historia(
     logging.basicConfig(level=logging.WARNING)
     cfg, scfg = load_config(), load_yaml("scanner.yaml")["universe"]
     key, secret = Secrets().require_alpaca()
-    pasos = ["copiar", "splits", "diarias", "universo", "minutos"] if paso == "todo" else [paso]
+    pasos = ["copiar", "splits", "diarias", "benchmarks", "universo", "minutos"] if paso == "todo" else [paso]
     hist_path = cfg.db_path.parent / "history.duckdb"
     say = lambda m: console.print(f"[{datetime.now():%H:%M:%S}] {m}")  # noqa: E731
     with Store(hist_path, memory_limit=cfg.duckdb_memory_limit) as hist:
@@ -761,6 +761,10 @@ def historia(
             rows, err = ingest_universe_daily(hist, fm, syms, H.DAILY_START, H.DAILY_COPY_FROM, cfg.data.feed,
                                               on_batch=on_batch)  # fmt: skip
             say(f"diarias: {rows:,} filas nuevas, {err} lotes con error")
+        if "benchmarks" in pasos:  # ETF (SPY/QQQ/IWM): no están entre las acciones comunes
+            fm = make_multi_fetcher(key, secret, cfg.data.feed, cfg.data.adjustment, cfg.data.max_requests_per_minute)
+            rows, err = ingest_universe_daily(hist, fm, H.BENCHMARKS, H.DAILY_START, H.DAILY_COPY_FROM, cfg.data.feed)
+            say(f"diarias de {', '.join(H.BENCHMARKS)}: {rows:,} filas, {err} errores")
         if "universo" in pasos:
             u = H.build_universe(hist, top)
             say(f"universo point-in-time: {u.height} filas, {u['symbol'].n_unique()} símbolos distintos")

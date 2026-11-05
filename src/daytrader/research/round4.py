@@ -184,6 +184,9 @@ def run_round4(hist: Store, bt: dict, strat: dict, cutoff: time, prior: list[flo
     base = CostModel.from_cfg(bt["costs"], bt["execution"])
     pess = CostModel.from_cfg({**bt["costs"], **bt["cost_scenarios"]["pesimista"]}, bt["execution"])
     acct = bt["account"]
+    first_spy = hist.query("SELECT min(session_date) AS d FROM bars_1d WHERE symbol = 'SPY'")["d"][0]
+    if first_spy is None or first_spy > date(2016, 1, 31):
+        raise RuntimeError("Falta la historia diaria de SPY 2016+: corre `daytrader historia --paso benchmarks`.")
     say("contextos por año…")
     ctx = contexts(hist, d0, d1, cutoff)
     say(f"contextos: {ctx.height:,} símbolo-días")
@@ -198,6 +201,8 @@ def run_round4(hist: Store, bt: dict, strat: dict, cutoff: time, prior: list[flo
 
     spy = hist.query("SELECT session_date, high, low, close FROM bars_1d WHERE symbol = 'SPY' AND session_date <= ? "
                      "ORDER BY session_date", [d1])  # fmt: skip
+    if spy.is_empty() or spy["session_date"].min() > date(2016, 1, 31):
+        raise RuntimeError("Falta la historia diaria de SPY 2016+: corre `daytrader historia --paso benchmarks`.")
     say("HMM mensual sobre SPY…")
     pvol = predicted_vol_prob(spy, session_list(d0, d1))
     calm = pvol.filter(pl.col("p_vol") < 0.5)["session_date"]
