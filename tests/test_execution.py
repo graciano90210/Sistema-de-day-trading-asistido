@@ -149,3 +149,12 @@ def test_time_messages_are_specific():
     assert "la sesión de hoy ya cerró" in after and not any("últimos" in x for x in after)
     before = check(ticket(), ACC, SES, CFG, OPEN - timedelta(hours=1)).reasons
     assert any("antes de la apertura" in x for x in before)
+
+
+def test_journal_allows_concurrent_processes(tmp_path):
+    """guard y trade usan el journal a la vez: ninguna conexión queda abierta entre operaciones."""
+    p = tmp_path / "j.duckdb"
+    a, b = Journal(p), Journal(p)  # como dos procesos
+    a.event("guard", "autorizado")
+    b.record_ticket(ticket(), "enviado")
+    assert a.trades_today(NOW.date()) == 1 and b.query("SELECT count(*) AS n FROM events")["n"][0] == 1

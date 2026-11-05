@@ -21,3 +21,4 @@ htmlcov/
 
 # Papers con copyright (no subir)
 docs/*.pdf
+reports/auto/

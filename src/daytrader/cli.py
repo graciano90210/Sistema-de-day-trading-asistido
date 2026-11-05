@@ -535,6 +535,10 @@ def trade(
     setup: Annotated[str, typer.Option(help="Setup (p. ej. ORB, reversión VWAP)")] = "",
     catalyst: Annotated[str, typer.Option("--catalizador")] = "",
     notes: Annotated[str, typer.Option("--notas")] = "",
+    riesgo: Annotated[
+        float | None,
+        typer.Option("--riesgo", help="Riesgo en % del capital (solo puede BAJAR el de risk.yaml), p. ej. 0.1"),
+    ] = None,
 ) -> None:
     """Propones una operación; el sistema calcula el tamaño (1%), aplica las reglas, pide y/n y la envía a PAPER."""
     from daytrader.execution.executor import ask_yes_no, run_ticket
@@ -544,6 +548,11 @@ def trade(
     if side_n is None:
         raise typer.BadParameter("side debe ser 'largo' o 'corto'")
     cfg, rcfg, broker, journal, ses, now, today = _exec_ctx()
+    if riesgo is not None:
+        from dataclasses import replace as _replace
+
+        rcfg = _replace(rcfg, risk_per_trade=min(rcfg.risk_per_trade, max(riesgo, 0.0) / 100))  # nunca sube
+        console.print(f"[dim]Riesgo de esta operación: {rcfg.risk_per_trade:.2%} del capital[/]")
     q = broker.quote(symbol.upper())
     ref = q["ask"] if side_n == "long" else q["bid"]
     ref = ref or q["mid"]
@@ -678,6 +687,19 @@ def note(
     j.note(fingerprint, text, "error" if error else "nota")
     console.print("Nota guardada.")
     j.close()
+
+
+@app.command(name="is-session")
+def is_session_cmd() -> None:
+    """Sale con código 0 si hoy (hora de Nueva York) hay sesión NYSE; 1 si no (festivo o fin de semana)."""
+    from datetime import UTC, datetime
+
+    from daytrader.market_calendar import ET, is_session
+
+    today = datetime.now(UTC).astimezone(ET).date()
+    ok = is_session(today)
+    console.print(f"{today}: {'hay sesión' if ok else 'sin sesión'}")
+    raise typer.Exit(0 if ok else 1)
 
 
 @app.command()

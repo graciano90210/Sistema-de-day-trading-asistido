@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -35,11 +37,35 @@ def _now() -> datetime:
 
 
 class Journal:
+    """Conexión de corta duración por operación (DuckDB admite un solo escritor): varios procesos
+    — `guard`, `trade`, `sync` — pueden usar el journal a la vez sin bloquearse entre sí."""
+
     def __init__(self, path: str | Path = ":memory:"):
-        if path != ":memory:":
+        self.path = str(path)
+        self._mem = duckdb.connect(":memory:") if self.path == ":memory:" else None
+        if self._mem is None:
             Path(path).parent.mkdir(parents=True, exist_ok=True)
-        self.con = duckdb.connect(str(path))
-        self.con.execute(SCHEMA)
+        with self._c() as con:
+            con.execute(SCHEMA)
+
+    @contextmanager
+    def _c(self):
+        if self._mem is not None:
+            yield self._mem
+            return
+        con = None
+        for attempt in range(20):  # si otro proceso escribe en ese instante, reintenta brevemente
+            try:
+                con = duckdb.connect(self.path)
+                break
+            except duckdb.IOException:
+                if attempt == 19:
+                    raise
+                time.sleep(0.25)
+        try:
+            yield con
+        finally:
+            con.close()
 
     def record_ticket(self, t: OrderTicket, status: str, reasons: list[str] | None = None,
                       order_id: str | None = None, client_order_id: str | None = None) -> None:  # fmt: skip
@@ -54,31 +80,38 @@ class Journal:
         }  # fmt: skip
         df = pl.DataFrame([row], schema_overrides={"limit_price": pl.Float64, "target_price": pl.Float64,
                                                    "order_id": pl.Utf8, "client_order_id": pl.Utf8})  # fmt: skip
-        self.con.register("_t", df)
-        self.con.execute("INSERT OR REPLACE INTO tickets BY NAME SELECT * FROM _t")
-        self.con.unregister("_t")
+        with self._c() as con:
+            con.register("_t", df)
+            con.execute("INSERT OR REPLACE INTO tickets BY NAME SELECT * FROM _t")
+            con.unregister("_t")
 
     def event(self, kind: str, detail: str) -> None:
-        self.con.execute("INSERT INTO events VALUES (?, ?, ?)", [_now(), kind, detail])
+        with self._c() as con:
+            con.execute("INSERT INTO events VALUES (?, ?, ?)", [_now(), kind, detail])
 
     def note(self, fingerprint: str, text: str, kind: str = "nota") -> None:
         if kind not in ("nota", "error"):
             raise ValueError("kind debe ser 'nota' o 'error'")
-        self.con.execute("INSERT INTO notes VALUES (?, ?, ?, ?)", [fingerprint, _now(), kind, text])
+        with self._c() as con:
+            con.execute("INSERT INTO notes VALUES (?, ?, ?, ?)", [fingerprint, _now(), kind, text])
 
     def trades_today(self, day) -> int:
-        return self.con.execute(
-            "SELECT count(*) FROM tickets WHERE session_date = ? AND status = 'enviado'", [day]
-        ).fetchall()[0][0]
+        with self._c() as con:
+            return con.execute(
+                "SELECT count(*) FROM tickets WHERE session_date = ? AND status = 'enviado'", [day]
+            ).fetchall()[0][0]
 
     def upsert_trade(self, row: dict) -> None:
         df = pl.DataFrame([{**row, "synced_at": _now()}])
-        self.con.register("_r", df)
-        self.con.execute("INSERT OR REPLACE INTO trades BY NAME SELECT * FROM _r")
-        self.con.unregister("_r")
+        with self._c() as con:
+            con.register("_r", df)
+            con.execute("INSERT OR REPLACE INTO trades BY NAME SELECT * FROM _r")
+            con.unregister("_r")
 
     def query(self, sql: str, params: list | None = None) -> pl.DataFrame:
-        return self.con.sql(sql, params=params or None).pl()
+        with self._c() as con:
+            return con.sql(sql, params=params or None).pl()
 
     def close(self) -> None:
-        self.con.close()
+        if self._mem is not None:
+            self._mem.close()
