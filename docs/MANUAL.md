@@ -99,7 +99,18 @@ maneja estos cambios solo.
 
 ## 5. Rutina diaria de paper trading
 
-### 5.1 Noche anterior (o temprano en la mañana)
+
+### 5.0 Automatización (opcional, recomendada)
+```bash
+scripts/auto/install_timers.sh               # instala los temporizadores de tu usuario
+scripts/auto/install_timers.sh --uninstall   # los quita
+systemctl --user list-timers 'daytrader-*'   # próximas ejecuciones
+```
+- **Lun–vie 20:30 ET**: `ingest` + `universe` (datos al día). **Lun–vie 09:40 ET**: `watchlist` del día.
+- En festivos no hacen nada; si el PC estaba apagado, se ejecutan al encenderlo. Logs en `reports/auto/`.
+- Funcionan mientras tu sesión de usuario esté iniciada (portátil encendido y con sesión abierta).
+
+### 5.1 Noche anterior (o temprano en la mañana) — si no usas la automatización
 ```bash
 uv run daytrader ingest        # actualiza barras 1 min de los 50 tickers
 uv run daytrader universe      # actualiza barras diarias del mercado (necesarias para el scanner)
