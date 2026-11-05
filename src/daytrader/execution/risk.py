@@ -34,6 +34,10 @@ class RiskConfig:
     simulated_capital: float | None = None
     simulated_start: str | None = None  # AAAA-MM-DD: desde cuándo se acumula el PnL al capital simulado
     account_type: str = "margin"  # cash | margin. Cash (< $2.000 en EE. UU.): sin cortos, sin apalancamiento
+    # Margen con menos de $25.000 (regla PDT de FINRA): máx. 3 day trades en 5 sesiones y poder de compra 2×
+    pdt_equity_min: float = 25_000
+    pdt_max_day_trades: int = 3
+    small_margin_mult: float = 2.0
 
 
 @dataclass(frozen=True)
@@ -44,6 +48,7 @@ class AccountState:
     open_notional: float
     trades_today: int
     day_notional_used: float = 0.0  # nocional ya comprado hoy (cuenta de efectivo: fondos liquidados)
+    day_trades_5d: int = 0  # entradas enviadas en las últimas 5 sesiones, incluida hoy (regla PDT)
 
 
 @dataclass(frozen=True)
@@ -152,6 +157,11 @@ def check(
         if account.day_notional_used + ticket.notional > account.equity * 1.001:
             r.append(f"cuenta de efectivo: nocional ${ticket.notional:,.2f} + ya usado hoy ${account.day_notional_used:,.2f} "
                      f"> capital ${account.equity:,.2f} (fondos liquidados)")  # fmt: skip
+    # Margen con menos de $25.000: regla PDT (cada entrada del sistema se cierra el mismo día = 1 day trade)
+    pdt = cfg.account_type == "margin" and account.equity < cfg.pdt_equity_min
+    if pdt and account.day_trades_5d >= cfg.pdt_max_day_trades:
+        r.append(f"regla PDT: ya hay {account.day_trades_5d} day trades en las últimas 5 sesiones "
+                 f"(máx. {cfg.pdt_max_day_trades} con capital < ${cfg.pdt_equity_min:,.0f})")  # fmt: skip
     # Riesgo por trade
     if ticket.risk_usd > cfg.risk_per_trade * account.equity * 1.001:
         r.append(f"riesgo ${ticket.risk_usd:,.2f} > {cfg.risk_per_trade:.0%} del capital")
@@ -163,7 +173,7 @@ def check(
         r.append(f"máximo de {cfg.max_trades_per_day} trades por día alcanzado")
     if account.open_positions >= cfg.max_positions:
         r.append(f"máximo de {cfg.max_positions} posiciones abiertas")
-    mult = 1.0 if cfg.account_type == "cash" else cfg.buying_power_mult
+    mult = 1.0 if cfg.account_type == "cash" else (cfg.small_margin_mult if pdt else cfg.buying_power_mult)
     if account.open_notional + ticket.notional > mult * account.equity:
         r.append(f"excede el poder de compra ({mult:g}× capital)")
     if ticket.notional > cfg.max_position_pct * account.equity * 1.001:

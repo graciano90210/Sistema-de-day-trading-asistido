@@ -193,3 +193,31 @@ def test_cash_account_rules_with_1000_dollars():
     assert any("fondos liquidados" in r for r in check(t, used, SES, CASH, NOW).reasons)
     kill = replace(acc, equity=969.0)  # -3,1% del capital simulado
     assert any("KILL SWITCH" in r for r in check(t, kill, SES, CASH, NOW).reasons)
+
+
+MARGIN = RiskConfig(simulated_capital=3000, account_type="margin")
+
+
+def test_small_margin_account_pdt_and_shorts():
+    acc = AccountState(equity=3000, last_equity=3000, open_positions=0, open_notional=0, trades_today=0)
+    short = build_ticket("XYZ", "short", 50.0, 51.0, 48.0, acc, MARGIN, NOW)
+    assert short.qty == 30 and check(short, acc, SES, MARGIN, NOW).ok  # cortos permitidos
+    third = replace(acc, day_trades_5d=2)
+    assert check(short, third, SES, MARGIN, NOW).ok
+    fourth = replace(acc, day_trades_5d=3)
+    assert any("PDT" in r for r in check(short, fourth, SES, MARGIN, NOW).reasons)
+    big = replace(acc, open_notional=5000)  # 2× = $6.000 de poder de compra
+    assert any("poder de compra (2×" in r for r in check(short, big, SES, MARGIN, NOW).reasons)
+    rich = AccountState(equity=30_000, last_equity=30_000, open_positions=0, open_notional=0, trades_today=0,
+                        day_trades_5d=9)  # fmt: skip
+    t = build_ticket("XYZ", "short", 50.0, 51.0, 48.0, rich, MARGIN, NOW)
+    assert check(t, rich, SES, MARGIN, NOW).ok  # con >= $25.000 no aplica
+
+
+def test_pdt_window_is_five_sessions():
+    from datetime import date
+
+    from daytrader.execution.simulated import pdt_window_start
+
+    assert pdt_window_start(date(2026, 11, 6)) == date(2026, 11, 2)  # lun–vie
+    assert pdt_window_start(date(2026, 11, 8)) == date(2026, 11, 2)  # domingo: últimas 5 sesiones

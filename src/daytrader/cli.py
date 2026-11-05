@@ -586,7 +586,10 @@ def positions() -> None:
     cfg, rcfg, broker, journal, ses, now, today = _exec_ctx()
     acc = _acct(broker, journal, rcfg, today)
     pnl = acc.equity - acc.last_equity
-    sim = " (simulado, cuenta de efectivo)" if rcfg.simulated_capital else ""
+    kind = "efectivo" if rcfg.account_type == "cash" else "margen"
+    sim = f" (simulado, cuenta de {kind})" if rcfg.simulated_capital else ""
+    if rcfg.account_type == "margin" and acc.equity < rcfg.pdt_equity_min:
+        console.print(f"Regla PDT: {acc.day_trades_5d} / {rcfg.pdt_max_day_trades} day trades en las últimas 5 sesiones")
     console.print(f"Capital{sim} ${acc.equity:,.2f} · PnL del día {pnl:+,.2f} ({pnl / acc.last_equity:+.2%}) · "
                   f"trades hoy {acc.trades_today}/{rcfg.max_trades_per_day} · kill switch en {-rcfg.daily_loss_limit:.0%}")  # fmt: skip
     for p in broker.positions():

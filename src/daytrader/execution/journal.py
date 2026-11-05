@@ -126,6 +126,13 @@ class Journal:
             ).fetchall()[0][0]
         return float(v)
 
+    def entries_since(self, day) -> int:
+        """Entradas enviadas desde `day` (inclusive). Conservador para la regla PDT: una límite no ejecutada también cuenta."""
+        with self._c() as con:
+            return int(con.execute(
+                "SELECT count(*) FROM tickets WHERE session_date >= ? AND status = 'enviado'", [day]
+            ).fetchall()[0][0])  # fmt: skip
+
     def upsert_trade(self, row: dict) -> None:
         df = pl.DataFrame([{**row, "synced_at": _now()}])
         with self._c() as con:
