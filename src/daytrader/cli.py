@@ -870,7 +870,10 @@ def mediodia(
     console.print(f"[dim]Barras SIP hasta {until.replace(tzinfo=UTC).astimezone(ET):%H:%M} ET. Volumen relativo aprox. "
                   "(el volumen diario incluye pre/post). Ranking descriptivo, no una señal probada.[/]")  # fmt: skip
     if rcfg.account_type == "margin" and acc.equity < rcfg.pdt_equity_min:
-        console.print(f"Regla PDT: {acc.day_trades_5d} / {rcfg.pdt_max_day_trades} day trades usados en 5 sesiones.")
+        console.print(
+            f"Regla PDT: {acc.day_trades_5d} / {rcfg.pdt_max_day_trades} day trades usados en 5 sesiones"
+            + ("." if rcfg.enforce_pdt else " (práctica: límite desactivado).")
+        )
     console.print("Siguiente paso: [bold]uv run daytrader contexto TICKER[/] para cada candidato elegido.")
 
 

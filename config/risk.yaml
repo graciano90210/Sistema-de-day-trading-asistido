@@ -20,3 +20,4 @@ simulated_start: "2026-11-06" # desde esta fecha, el PnL realizado del journal s
 account_type: margin          # margen: permite cortos. Con < $25.000 aplica la regla PDT (abajo)
 pdt_max_day_trades: 3         # máx. day trades en 5 sesiones con capital < $25.000 (FINRA; confirmar con el bróker)
 small_margin_mult: 2.0        # poder de compra 2× con capital < $25.000 (el 4× intradía exige ser PDT con $25.000)
+enforce_pdt: false            # PRÁCTICA (pedido del usuario 2026-11-05): sin límite PDT; con dinero real → true

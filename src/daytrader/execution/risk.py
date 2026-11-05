@@ -38,6 +38,7 @@ class RiskConfig:
     pdt_equity_min: float = 25_000
     pdt_max_day_trades: int = 3
     small_margin_mult: float = 2.0
+    enforce_pdt: bool = True  # False = práctica: se ignora el límite de day trades (tamaño y 2× se mantienen)
 
 
 @dataclass(frozen=True)
@@ -159,7 +160,7 @@ def check(
                      f"> capital ${account.equity:,.2f} (fondos liquidados)")  # fmt: skip
     # Margen con menos de $25.000: regla PDT (cada entrada del sistema se cierra el mismo día = 1 day trade)
     pdt = cfg.account_type == "margin" and account.equity < cfg.pdt_equity_min
-    if pdt and account.day_trades_5d >= cfg.pdt_max_day_trades:
+    if pdt and cfg.enforce_pdt and account.day_trades_5d >= cfg.pdt_max_day_trades:
         r.append(f"regla PDT: ya hay {account.day_trades_5d} day trades en las últimas 5 sesiones "
                  f"(máx. {cfg.pdt_max_day_trades} con capital < ${cfg.pdt_equity_min:,.0f})")  # fmt: skip
     # Riesgo por trade

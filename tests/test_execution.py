@@ -238,3 +238,12 @@ def test_midday_candidate_scoring():
     short = evaluate(ctx("DN", 49.2, 50.5), -0.05, None, 1e6, 1.5e6, 0.5, 49.19, 49.21, 3000, 0.01, False)
     assert short.lean == "corto" and any("no permite cortos" in n for n in short.notes)
     assert [c.symbol for c in top3([cold, short, hot])][0] == "HOT"
+
+
+def test_pdt_can_be_disabled_for_practice():
+    cfg = replace(MARGIN, enforce_pdt=False)
+    acc = AccountState(
+        equity=3000, last_equity=3000, open_positions=0, open_notional=0, trades_today=0, day_trades_5d=7
+    )
+    t = build_ticket("XYZ", "short", 50.0, 51.0, 48.0, acc, cfg, NOW)
+    assert check(t, acc, SES, cfg, NOW).ok
