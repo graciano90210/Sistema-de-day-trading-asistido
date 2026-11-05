@@ -6,6 +6,7 @@ import logging
 from datetime import date, timedelta
 from typing import Annotated
 
+import polars as pl
 import typer
 from rich.console import Console
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, TimeElapsedColumn
@@ -201,6 +202,132 @@ def watchlist(
     for name, n in res.funnel:
         console.print(f"  {name:<45} {n:>6,}")
     console.print(f"Reporte: {out}")
+
+
+@app.command()
+def backfill(
+    start: Annotated[
+        str | None, typer.Option(help="YYYY-MM-DD (por defecto: primera sesión con 21 días de historia)")
+    ] = None,
+    end: Annotated[str | None, typer.Option(help="YYYY-MM-DD inclusive (por defecto: última sesión completa)")] = None,
+    no_news: Annotated[bool, typer.Option(help="No descargar noticias")] = False,
+) -> None:
+    """Reconstruye watchlists históricas (point-in-time) y descarga barras 1m de sus tickers. Reanudable."""
+    from daytrader.config import load_yaml
+    from daytrader.data.alpaca_client import fetch_news, make_multi_fetcher
+    from daytrader.data.sec import ensure_companyfacts, refresh_sec_tickers, shares_outstanding_asof
+    from daytrader.scanner.history import backfill as run_backfill
+    from daytrader.scanner.history import scannable_days
+
+    logging.basicConfig(level=logging.WARNING)
+    cfg, scfg = load_config(), load_yaml("scanner.yaml")
+    secrets = Secrets()
+    key, secret = secrets.require_alpaca()
+    ua = secrets.require_sec_user_agent()
+    fetch_many = make_multi_fetcher(key, secret, cfg.data.feed, cfg.data.adjustment, cfg.data.max_requests_per_minute)
+    d1 = date.fromisoformat(end) if end else last_complete_session()
+    with Store(cfg.db_path, memory_limit=cfg.duckdb_memory_limit) as store:
+        if store.query("SELECT count(*) AS n FROM sec_tickers")["n"][0] == 0:
+            refresh_sec_tickers(store, ua)
+
+        def shares_lookup(symbols, d):
+            ciks = store.query(
+                f"SELECT cik FROM sec_tickers WHERE symbol IN ({','.join('?' * len(symbols))})", symbols
+            )["cik"].to_list() if symbols else []  # fmt: skip
+            ensure_companyfacts(store, ua, ciks)
+            return shares_outstanding_asof(store, symbols, d)
+
+        days = scannable_days(store, date.fromisoformat(start) if start else date(2000, 1, 1), d1)
+        console.print(f"Backfill: {len(days)} sesiones {days[0]} → {days[-1]}")
+        news_fetch = None if no_news else (lambda s, a, b: fetch_news(key, secret, s, a, b))
+        with Progress(
+            TextColumn("{task.description}"), BarColumn(), MofNCompleteColumn(), TimeElapsedColumn(), console=console
+        ) as prog:
+            task = prog.add_task("", total=len(days))
+            ok, err = run_backfill(
+                store, days, scfg, fetch_many, news_fetch, shares_lookup, cfg.data.feed,
+                on_day=lambda d, ok, err: prog.update(task, advance=1, description=f"{d} ok={ok} err={err}"),
+            )  # fmt: skip
+        console.print(f"Sesiones nuevas OK: {ok} · errores: {err}")
+
+
+@app.command()
+def backtest(
+    strategies: Annotated[
+        str, typer.Option(help="Variantes de config/strategies.yaml, coma-separadas")
+    ] = "orb_5,orb_15,vwap_rev",
+    universes: Annotated[str, typer.Option(help="gappers, control o ambos")] = "gappers,control",
+    start: Annotated[str | None, typer.Option(help="YYYY-MM-DD (por defecto in_sample_start)")] = None,
+    end: Annotated[str | None, typer.Option(help="YYYY-MM-DD (por defecto el día antes del holdout)")] = None,
+    db: Annotated[str | None, typer.Option(help="Ruta alternativa de la DB (p. ej. copia de desarrollo)")] = None,
+    out: Annotated[str, typer.Option(help="Nombre del reporte en reports/")] = "backtest_IS.md",
+    unseal_oos: Annotated[
+        bool, typer.Option("--unseal-oos", help="Permite evaluar el periodo OOS (solo fase 4)")
+    ] = False,
+) -> None:
+    """Backtest de estrategias con costos y cartera → reports/<out> y data/backtests/*.parquet"""
+    import yaml
+
+    from daytrader.backtest.costs import CostModel
+    from daytrader.backtest.metrics import spy_buy_and_hold
+    from daytrader.backtest.portfolio import simulate_portfolio
+    from daytrader.backtest.report import render, summary_row
+    from daytrader.backtest.runner import check_holdout, control_contexts, gapper_contexts, run_backtest, session_list
+    from daytrader.config import ROOT, load_yaml
+    from daytrader.scanner.premarket import parse_hhmm
+
+    cfg, bt, strat_cfg, scfg = (
+        load_config(),
+        load_yaml("backtest.yaml"),
+        load_yaml("strategies.yaml"),
+        load_yaml("scanner.yaml"),
+    )
+    holdout = date.fromisoformat(bt["holdout_start"])
+    d0 = date.fromisoformat(start or bt["in_sample_start"])
+    d1 = date.fromisoformat(end) if end else holdout - timedelta(days=1)
+    check_holdout(d0, d1, holdout, unseal_oos)
+    variants = {s: strat_cfg[s] for s in strategies.split(",")}
+    costs = CostModel.from_cfg(bt["costs"], bt["execution"])
+    days = session_list(d0, d1)
+    rows, runs, sens = [], {}, []
+    outdir = ROOT / "data" / "backtests"
+    outdir.mkdir(parents=True, exist_ok=True)
+    with Store(db or cfg.db_path, read_only=True) as store:
+        spy = spy_buy_and_hold(store, d0, d1)
+        for uni in universes.split(","):
+            with console.status(f"Contextos {uni}…"):
+                ctx = (
+                    gapper_contexts(store, d0, d1) if uni == "gappers"
+                    else control_contexts(store, load_universe(), d0, d1, parse_hhmm(scfg["cutoff_et"]))
+                )  # fmt: skip
+            console.print(f"{uni}: {ctx.height:,} símbolo-días")
+            with console.status(f"Backtest {uni}…"):
+                trades = run_backtest(store, ctx, variants, bt, costs)
+            for name in variants:
+                t = trades.filter(pl.col("strategy") == name) if not trades.is_empty() else trades
+                t, eq = simulate_portfolio(t, bt["account"], days)
+                key = f"{name} · {uni}"
+                runs[key] = (t, eq)
+                rows.append(summary_row(name, uni, t, eq))
+                if not t.is_empty():
+                    t.write_parquet(outdir / f"{name}__{uni}__{d0}_{d1}.parquet")
+                console.print(f"  {key}: {t.filter(pl.col('taken')).height if not t.is_empty() else 0} trades")
+            # Sensibilidad a costos: mismas señales, distinto modelo de costos.
+            for scen, over in (bt.get("cost_scenarios") or {}).items():
+                c2 = CostModel.from_cfg({**bt["costs"], **over}, bt["execution"])
+                with console.status(f"Escenario de costos {scen} · {uni}…"):
+                    tr2 = run_backtest(store, ctx, variants, bt, c2)
+                for name in variants:
+                    t2 = tr2.filter(pl.col("strategy") == name) if not tr2.is_empty() else tr2
+                    t2, eq2 = simulate_portfolio(t2, bt["account"], days)
+                    sens.append({**summary_row(name, uni, t2, eq2), "escenario": scen})
+            sens += [{**r, "escenario": "base"} for r in rows if r["universo"] == uni]
+    md = render(
+        f"Backtest {d0} → {d1}", (d0, d1), holdout,
+        yaml.safe_dump({"strategies": variants, **bt}, sort_keys=False, allow_unicode=True), rows, runs, spy, sens,
+    )  # fmt: skip
+    (cfg.reports_path / out).write_text(md)
+    console.print(f"Reporte: {cfg.reports_path / out}")
 
 
 if __name__ == "__main__":

@@ -81,6 +81,18 @@ CREATE TABLE IF NOT EXISTS shares_outstanding (
     shares DOUBLE, form VARCHAR,
     PRIMARY KEY (cik, tag, end_date, filed, accn, shares)
 );
+-- Watchlists históricas reconstruidas point-in-time (una fila por símbolo y sesión).
+CREATE TABLE IF NOT EXISTS watchlists (
+    session_date DATE NOT NULL, cutoff_utc TIMESTAMP NOT NULL, rank INTEGER NOT NULL, symbol VARCHAR NOT NULL,
+    gap DOUBLE, pm_last DOUBLE, prev_close DOUBLE, pm_volume DOUBLE, rvol DOUBLE, pm_dollar_volume DOUBLE,
+    atr14 DOUBLE, atr_pct DOUBLE, adv_usd DOUBLE, shares_out DOUBLE,
+    catalyst VARCHAR, n_news INTEGER, n_relevant INTEGER,
+    PRIMARY KEY (session_date, symbol)
+);
+CREATE TABLE IF NOT EXISTS scan_log (
+    session_date DATE PRIMARY KEY, n_universe INTEGER, n_candidates INTEGER, n_watchlist INTEGER,
+    status VARCHAR, error VARCHAR, finished_at TIMESTAMP
+);
 CREATE TABLE IF NOT EXISTS sec_fetch_log (cik BIGINT PRIMARY KEY, fetched_at TIMESTAMP, status VARCHAR);
 CREATE TABLE IF NOT EXISTS ingest_log (
     symbol VARCHAR NOT NULL, timeframe VARCHAR NOT NULL,

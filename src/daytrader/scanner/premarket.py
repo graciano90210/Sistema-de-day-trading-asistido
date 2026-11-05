@@ -34,11 +34,20 @@ def parse_hhmm(s: str) -> time:
 
 
 def summarize_premarket(
-    raw: pl.DataFrame, symbols: list[str], d: date, start_utc: datetime, cutoff_utc: datetime
+    raw: pl.DataFrame,
+    symbols: list[str],
+    d: date,
+    start_utc: datetime,
+    cutoff_utc: datetime,
+    bar_minutes: int = 1,
 ) -> pl.DataFrame:
-    """Una fila por símbolo pedido (volumen 0 si no hubo operaciones)."""
+    """Una fila por símbolo pedido (volumen 0 si no hubo operaciones).
+
+    Una barra de `bar_minutes` que empieza en t está disponible en t + bar_minutes.
+    """
+    span = timedelta(minutes=bar_minutes)
     bars = raw.filter(
-        (pl.col("ts_utc") >= start_utc) & ((pl.col("ts_utc") + ONE_MIN) <= cutoff_utc)  # available_at <= cutoff
+        (pl.col("ts_utc") >= start_utc) & ((pl.col("ts_utc") + span) <= cutoff_utc)  # available_at <= cutoff
     ).sort("symbol", "ts_utc")
     agg = bars.group_by("symbol").agg(
         pl.col("close").last().alias("last"),
@@ -67,9 +76,18 @@ def ensure_snapshots(
     dates: list[date],
     start_et: time,
     cutoff_et: time,
-    batch_size: int = 200,
+    batch_size: int = 1000,  # la latencia por request domina: lotes grandes rinden ~4× más
+    bar_minutes: int = 5,
 ) -> int:
-    """Descarga y resume el pre-market de (símbolo, fecha) que aún no estén en caché."""
+    """Descarga y resume el pre-market de (símbolo, fecha) que aún no estén en caché.
+
+    Usa barras de `bar_minutes` (5 por defecto: 5× menos datos que 1 min y mismo resultado si el
+    cutoff y el inicio están alineados a múltiplos de 5 minutos).
+    """
+    if (start_et.minute % bar_minutes) or (cutoff_et.minute % bar_minutes):
+        raise ValueError(f"inicio y cutoff deben estar alineados a {bar_minutes} min")
+    tf = {1: "1m", 5: "5m"}[bar_minutes]
+    span = timedelta(minutes=bar_minutes)
     fetched = 0
     for d in dates:
         start_utc, cutoff_utc = et_to_utc_naive(d, start_et), et_to_utc_naive(d, cutoff_et)
@@ -81,9 +99,9 @@ def ensure_snapshots(
         missing = [s for s in symbols if s not in have]
         for i in range(0, len(missing), batch_size):
             batch = missing[i : i + batch_size]
-            # Alpaca incluye la barra de `end`: pedimos hasta la última barra con available_at <= cutoff.
-            raw = fetch_many(batch, "1m", start_utc, cutoff_utc - ONE_MIN)
-            store.upsert("premarket_snap", summarize_premarket(raw, batch, d, start_utc, cutoff_utc))
+            # Alpaca incluye la barra que EMPIEZA en `end`: pedimos hasta la última con available_at <= cutoff.
+            raw = fetch_many(batch, tf, start_utc, cutoff_utc - span)
+            store.upsert("premarket_snap", summarize_premarket(raw, batch, d, start_utc, cutoff_utc, bar_minutes))
             fetched += len(batch)
     return fetched
 

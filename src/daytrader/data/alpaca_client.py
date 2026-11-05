@@ -16,7 +16,7 @@ from alpaca.data.enums import Adjustment, DataFeed
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.historical.corporate_actions import CorporateActionsClient
 from alpaca.data.requests import CorporateActionsRequest, StockBarsRequest
-from alpaca.data.timeframe import TimeFrame
+from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 
 log = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ RAW_SCHEMA = {
     "vwap": pl.Float64,
 }
 
-_TIMEFRAMES = {"1m": TimeFrame.Minute, "1d": TimeFrame.Day}
+_TIMEFRAMES = {"1m": TimeFrame.Minute, "5m": TimeFrame(5, TimeFrameUnit.Minute), "1d": TimeFrame.Day}
 
 
 class RateLimiter:

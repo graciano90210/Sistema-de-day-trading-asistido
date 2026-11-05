@@ -1,0 +1,34 @@
+# Backtester (fase 3)
+
+# Muestra fuera de muestra SELLADA: el runner se niega a evaluar fechas >= holdout_start
+# salvo con --unseal-oos (fase 4). No mirar resultados OOS mientras se ajustan parámetros.
+holdout_start: "2026-01-01"
+in_sample_start: "2024-12-03"
+
+account:
+  initial_equity: 100_000
+  risk_per_trade: 0.01        # 1% del capital por trade (R en dólares)
+  max_positions: 5            # posiciones simultáneas
+  max_trades_per_day: 10
+  daily_loss_limit: 0.03      # kill switch: sin nuevas entradas tras -3% realizado en el día
+  buying_power_mult: 4.0      # poder de compra intradía (4× capital)
+
+execution:
+  eod_exit_et: "15:50"        # cierre forzado (apertura de la barra 15:50)
+  stop_slippage_mult: 1.5     # los stops (órdenes a mercado en movimiento) pagan más slippage
+
+# Sensibilidad: se re-corre el backtest con estos ajustes sobre `costs` (solo para la tabla resumen).
+cost_scenarios:
+  optimista: {half_spread_k: 0.05, impact_k: 0.25}
+  pesimista: {half_spread_k: 0.20, impact_k: 1.0, commission_per_share: 0.005}
+
+costs:
+  commission_per_share: 0.0   # Alpaca: sin comisión. Sensibilidad: 0.005
+  sec_fee_rate: 0.0000278     # Section 31, sobre el nocional vendido
+  taf_per_share: 0.000166     # FINRA TAF, en ventas
+  taf_max: 8.30
+  min_half_spread: 0.005      # medio tick
+  half_spread_k: 0.10         # half_spread = k × mediana(high-low) de las 30 barras previas.
+                              # Calibrado vs NBBO SIP real: control (n=200) k=0.098; gappers (n=250) k=0.100; p75 ~0.19.
+  impact_k: 0.5               # impacto = k × σ_1m × precio × sqrt(acciones / volumen medio 1m)
+  lookback_bars: 30

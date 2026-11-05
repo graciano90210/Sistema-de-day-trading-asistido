@@ -1,0 +1,37 @@
+# Variantes de estrategia (fase 3). Cada clave es una variante que el backtester puede correr.
+# Horas en ET. Todas usan solo barras RTH de 1 minuto, point-in-time.
+
+orb_5:
+  type: orb
+  or_minutes: 5               # rango de apertura 09:30–09:35
+  direction: with_gap         # with_gap | both | long_only
+  stop: or_opposite           # or_opposite (otro extremo del rango) | or_mid
+  target_r: 2.0               # objetivo en múltiplos de R; null = mantener hasta el cierre forzado
+  min_range_atr: 0.05         # descarta rangos diminutos (en fracción del ATR diario)
+  max_range_atr: 1.0          # descarta rangos enormes (riesgo por acción excesivo)
+  min_or_bars: 3              # barras mínimas dentro del rango (liquidez)
+  last_entry_et: "15:45"
+
+orb_15:
+  type: orb
+  or_minutes: 15
+  direction: with_gap
+  stop: or_opposite
+  target_r: 2.0
+  min_range_atr: 0.05
+  max_range_atr: 1.0
+  min_or_bars: 8
+  last_entry_et: "15:45"
+
+vwap_rev:
+  type: vwap_reversion
+  k_sigma: 2.0                # desviación mínima respecto al VWAP (en desviaciones estándar de close-VWAP)
+  min_bars: 30                # barras mínimas antes de evaluar (sigma estable)
+  lookback_extreme: 10        # barras para ubicar el extremo (stop)
+  stop_buffer_atr: 0.02       # colchón del stop más allá del extremo (fracción del ATR diario)
+  min_rr: 1.0                 # recompensa/riesgo mínima (VWAP como objetivo)
+  max_hold_minutes: 60        # stop por tiempo
+  first_entry_et: "10:00"
+  last_entry_et: "15:00"
+  direction: both
+  max_trades_per_symbol: 1

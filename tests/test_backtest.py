@@ -1,0 +1,141 @@
+"""Motor de ejecución, cartera, métricas y candado OOS."""
+
+from __future__ import annotations
+
+from datetime import date, datetime, timedelta
+
+import numpy as np
+import polars as pl
+import pytest
+
+from daytrader.backtest.costs import CostModel
+from daytrader.backtest.engine import simulate
+from daytrader.backtest.metrics import equity_stats, trade_stats
+from daytrader.backtest.portfolio import simulate_portfolio
+from daytrader.backtest.runner import HoldoutSealed, check_holdout
+from daytrader.strategies.base import Signal
+
+D = date(2025, 3, 14)
+T0 = datetime(2025, 3, 14, 13, 30)
+EOD = datetime(2025, 3, 14, 19, 50)
+FREE = CostModel(
+    commission_per_share=0, sec_fee_rate=0, taf_per_share=0, min_half_spread=0, half_spread_k=0, impact_k=0
+)
+
+
+def bars(ohlc: list[tuple[float, float, float, float]]) -> pl.DataFrame:
+    ts = [T0 + timedelta(minutes=i) for i in range(len(ohlc))]
+    o, h, lw, c = ([float(x) for x in col] for col in zip(*ohlc, strict=True))
+    return pl.DataFrame(
+        {"ts_utc": ts, "available_at": [t + timedelta(minutes=1) for t in ts], "open": o, "high": h, "low": lw,
+         "close": c, "volume": [1e5] * len(ts)},
+        schema_overrides={"ts_utc": pl.Datetime("us"), "available_at": pl.Datetime("us")},
+    )  # fmt: skip
+
+
+def sig(side=1, stop=99.0, target=102.0, decided_min=1, ref=100.0, max_hold=None) -> Signal:
+    return Signal("AAA", D, "t", side, T0, T0 + timedelta(minutes=decided_min), ref, stop, target, max_hold)
+
+
+FLAT = (100, 100.5, 99.5, 100)
+
+
+def test_entry_is_next_bar_open_not_signal_close():
+    b = bars([(100, 100, 100, 100), (100.3, 100.4, 100.2, 100.3)] + [FLAT] * 5)
+    t = simulate(sig(), b, FREE, EOD, 100)
+    assert t.entry_ts == T0 + timedelta(minutes=1) and t.entry_px == 100.3
+
+
+def test_gap_through_stop_fills_at_open_worse_than_stop():
+    b = bars([FLAT, FLAT, (98.0, 98.2, 97.5, 98.0)])
+    t = simulate(sig(stop=99.0), b, FREE, EOD, 100)
+    assert t.exit_reason == "stop" and t.exit_px == 98.0 and t.r_net < -1
+
+
+def test_stop_and_target_same_bar_counts_as_stop():
+    b = bars([FLAT, FLAT, (100, 103, 98.5, 100)])
+    assert simulate(sig(), b, FREE, EOD, 100).exit_reason == "stop"
+
+
+def test_target_must_be_exceeded_not_touched():
+    b = bars([FLAT, FLAT, (100, 102.0, 99.8, 101), (101, 102.01, 100.5, 102)])
+    t = simulate(sig(), b, FREE, EOD, 100)
+    assert t.exit_reason == "target" and t.exit_ts == T0 + timedelta(minutes=3) and t.exit_px == 102.0
+
+
+def test_target_not_credited_on_entry_bar_but_stop_is():
+    b = bars([FLAT, (100, 105, 99.9, 104)] + [FLAT] * 3)
+    assert simulate(sig(), b, FREE, EOD, 100).exit_reason != "target"
+    b = bars([FLAT, (100, 100.2, 98.0, 98.5)] + [FLAT] * 3)
+    t = simulate(sig(), b, FREE, EOD, 100)
+    assert t.exit_reason == "stop" and t.exit_ts == T0 + timedelta(minutes=1)
+
+
+def test_short_mirror_and_eod_exit():
+    b = bars([FLAT] * 3 + [(99, 99.2, 98.8, 99)] * 3)
+    eod = T0 + timedelta(minutes=4)
+    t = simulate(sig(side=-1, stop=101.0, target=95.0), b, FREE, eod, 100)
+    assert t.exit_reason == "eod" and t.exit_ts == eod and t.entry_px == 100 and t.exit_px == 99
+    assert t.r_net == pytest.approx(1.0)
+
+
+def test_time_stop():
+    b = bars([FLAT] * 20)
+    t = simulate(sig(max_hold=timedelta(minutes=5)), b, FREE, EOD, 100)
+    assert t.exit_reason == "time" and t.exit_ts == T0 + timedelta(minutes=6)
+
+
+def test_costs_reduce_r_and_slippage_uses_only_prior_bars():
+    pre = [(100, 100.5, 99.5, 100)] * 30
+    post = [(100, 100.1, 99.9, 100), (100, 200, 0.01, 100)]  # barra absurda DESPUÉS de la entrada
+    b = bars(pre + post + [FLAT] * 3)
+    costly = CostModel(commission_per_share=0.005, half_spread_k=0.25, impact_k=0.0, min_half_spread=0.005)
+    s = Signal("AAA", D, "t", 1, T0, T0 + timedelta(minutes=30), 100.0, 98.0, None)
+    t = simulate(s, b, costly, EOD, 100)
+    assert t.slippage_ps == pytest.approx(0.25 * 1.0)  # mediana(high-low)=1.0 de las 30 barras previas
+    assert t.r_net < t.r_gross
+
+
+def test_holdout_guard():
+    check_holdout(date(2025, 1, 1), date(2025, 12, 31), date(2026, 1, 1), allow_oos=False)
+    with pytest.raises(HoldoutSealed):
+        check_holdout(date(2025, 1, 1), date(2026, 1, 1), date(2026, 1, 1), allow_oos=False)
+    check_holdout(date(2025, 1, 1), date(2026, 6, 1), date(2026, 1, 1), allow_oos=True)
+
+
+ACCT = {"initial_equity": 100_000, "risk_per_trade": 0.01, "max_positions": 2, "max_trades_per_day": 10,
+        "daily_loss_limit": 0.03, "buying_power_mult": 4.0}  # fmt: skip
+
+
+def _trade(minute, r, exit_min=None, day=D):
+    t0 = datetime(day.year, day.month, day.day, 14, 0)
+    return {"session_date": day, "symbol": f"S{minute}", "entry_ts": t0 + timedelta(minutes=minute),
+            "exit_ts": t0 + timedelta(minutes=exit_min if exit_min is not None else minute + 1),
+            "shares": 100, "planned_risk": 1.0, "entry_px": 50.0, "r_net": r}  # fmt: skip
+
+
+def test_portfolio_max_positions_and_kill_switch():
+    t = pl.DataFrame([_trade(0, 1.0, 100), _trade(1, 1.0, 100), _trade(2, 1.0, 100)])
+    out, _ = simulate_portfolio(t, ACCT, [D])
+    assert out["taken"].to_list() == [True, True, False] and out["skip_reason"][2] == "max_posiciones"
+    # Con riesgo compuesto, 3 pérdidas de -1R = -2.97% (aún no); la 4.ª lleva a -3.94% → la 5.ª se bloquea.
+    t = pl.DataFrame([_trade(i * 2, -1.0) for i in range(5)])
+    out, eq = simulate_portfolio(t, ACCT, [D])
+    assert out["taken"].to_list() == [True, True, True, True, False] and out["skip_reason"][4] == "kill_switch"
+    assert eq["equity"][0] == pytest.approx(100_000 - 1000 - 990 - 980.1 - 970.299)
+
+
+def test_trade_stats():
+    t = pl.DataFrame({"r_net": [2.0, -1.0, -1.0, 2.0, -1.0]})
+    s = trade_stats(t)
+    assert s["trades"] == 5 and s["win_rate"] == 0.4 and s["avg_r"] == pytest.approx(0.2)
+    assert s["profit_factor"] == pytest.approx(4 / 3) and s["max_loss_streak"] == 2
+
+
+def test_equity_stats_drawdown_and_sharpe():
+    eq = pl.DataFrame({"equity": [101.0, 99.0, 102.0, 98.0], "ret": [0.01, 99 / 101 - 1, 102 / 99 - 1, 98 / 102 - 1]})
+    s = equity_stats(eq)
+    assert s["total_return"] == pytest.approx(-0.02)
+    assert s["max_drawdown"] == pytest.approx(98 / 102 - 1)
+    r = eq["ret"].to_numpy()
+    assert s["sharpe"] == pytest.approx(r.mean() / r.std(ddof=1) * np.sqrt(252))
