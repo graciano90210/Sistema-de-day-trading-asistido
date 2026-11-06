@@ -20,3 +20,14 @@ def test_ingest_parallel_matches_sequential_and_resumes():
     assert a.query(q).equals(b.query(q))
     again = ingest_parallel(b, [fake, fake], ["AAA", "BBB"], date(2017, 1, 1), date(2017, 7, 1), "1m", "sip")
     assert again.chunks_done == 0 and again.chunks_skipped == 12
+
+
+def test_alpaca_client_gets_http_timeout():
+    from types import SimpleNamespace
+
+    from daytrader.data.alpaca_client import HTTP_TIMEOUT, with_timeout
+
+    seen = {}
+    fake = SimpleNamespace(_session=SimpleNamespace(request=lambda m, u, **kw: seen.update(kw)))
+    with_timeout(fake)._session.request("GET", "http://x")
+    assert seen["timeout"] == HTTP_TIMEOUT

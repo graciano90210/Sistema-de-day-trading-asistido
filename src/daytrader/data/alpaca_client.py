@@ -86,6 +86,22 @@ def raw_bars_to_frame(symbol: str, bars: list[dict]) -> pl.DataFrame:
     )
 
 
+HTTP_TIMEOUT = (10, 120)  # (conectar, leer) en segundos: sin esto, una conexión caída cuelga el hilo para siempre
+
+
+def with_timeout(client):
+    """El SDK de Alpaca usa requests sin timeout; se lo añadimos a su sesión HTTP."""
+    session = client._session
+    original = session.request
+
+    def request(method, url, **kw):
+        kw.setdefault("timeout", HTTP_TIMEOUT)
+        return original(method, url, **kw)
+
+    session.request = request
+    return client
+
+
 def make_bar_fetcher(
     api_key: str,
     secret_key: str,
@@ -94,7 +110,7 @@ def make_bar_fetcher(
     max_requests_per_minute: int = 180,
     max_retries: int = 5,
 ) -> Fetcher:
-    client = StockHistoricalDataClient(api_key, secret_key, raw_data=True)
+    client = with_timeout(StockHistoricalDataClient(api_key, secret_key, raw_data=True))
     limiter = RateLimiter(max_requests_per_minute)
 
     def fetch(symbol: str, timeframe: str, start_utc: datetime, end_utc: datetime) -> pl.DataFrame:
@@ -130,7 +146,7 @@ def make_multi_fetcher(
     max_retries: int = 5,
 ) -> MultiFetcher:
     """Igual que make_bar_fetcher pero con varios símbolos por request (Alpaca pagina internamente)."""
-    client = StockHistoricalDataClient(api_key, secret_key, raw_data=True)
+    client = with_timeout(StockHistoricalDataClient(api_key, secret_key, raw_data=True))
     limiter = RateLimiter(max_requests_per_minute)
 
     def fetch_many(symbols: list[str], timeframe: str, start_utc: datetime, end_utc: datetime) -> pl.DataFrame:
