@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from datetime import date, time, timedelta
+from pathlib import Path
 
 import lightgbm as lgb
 import numpy as np
@@ -20,6 +23,7 @@ from daytrader.research.round2 import evaluate
 log = logging.getLogger(__name__)
 
 N_TRIALS = 30  # 25 previos + P1, P2, H3', H5b', H4'
+CACHE_DIR = Path("data/cache/round4")  # backtests por año (ignorado por git)
 PERIODS = {
     "desarrollo": (date(2017, 1, 3), date(2021, 12, 31)),  # desviación 1: Alpaca empieza en 2016-01-04
     "validacion": (date(2022, 1, 3), date(2024, 10, 31)),
@@ -192,9 +196,20 @@ def run_round4(hist: Store, bt: dict, strat: dict, cutoff: time, prior: list[flo
     say(f"contextos: {ctx.height:,} símbolo-días")
     vs = variants(strat)
     parts = []
+    # Caché por año (reanudable si se corta): la clave depende de toda la configuración → cambiarla invalida.
+    key = hashlib.sha256(json.dumps([vs, bt, str(cutoff), str(d0), str(d1)], sort_keys=True, default=str)
+                         .encode()).hexdigest()[:12]  # fmt: skip
+    cache = CACHE_DIR / key
+    cache.mkdir(parents=True, exist_ok=True)
     for y in range(d0.year, d1.year + 1):  # por año: acota memoria y deja progreso
+        f = cache / f"{y}.parquet"
+        if f.exists():
+            parts.append(pl.read_parquet(f))
+            say(f"backtest {y}: {parts[-1].height:,} trades (caché)")
+            continue
         cy = ctx.filter(pl.col("session_date").dt.year() == y)
         parts.append(run_backtest(hist, cy, vs, bt, base, alt_costs=pess, alt_variants=set(MAIN)))
+        parts[-1].write_parquet(f)
         say(f"backtest {y}: {parts[-1].height:,} trades")
     raw = pl.concat([p for p in parts if not p.is_empty()], how="diagonal_relaxed")
     tb, tp = raw.filter(pl.col("costs") == "base"), raw.filter(pl.col("costs") == "alt")
