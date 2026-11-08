@@ -30,8 +30,10 @@ Python 3.12 + uv · alpaca-py · polars/pandas · DuckDB (`data/market.duckdb`) 
 Lógica en `src/daytrader/`; las skills en `.claude/skills/<nombre>/` son wrappers delgados (SKILL.md + scripts/).
 
 ## Estado
-Fases 1–6 cerradas. Búsqueda de estrategias intradía cerrada sin edge (25 intentos, ver README).
-OOS 2026 sigue sellado. Operativa paper discrecional vía `daytrader trade` (el usuario confirma y/n).
+Fases 1–8 cerradas. Sin edge en 34 intentos pre-registrados: intradía (rondas 1–4, 10 años de historia en
+`data/history.duckdb`) y swing diario (fase 8, `reports/fase8_swing.md`). OOS 2026 sigue sellado.
+Operativa paper discrecional de PRÁCTICA vía `daytrader mediodia` → `contexto` (incluye patrones P1/P2, sin edge)
+→ `trade` (el usuario confirma y/n). `daytrader momentum`: lista S1 de observación (sin edge).
 
 ## Comandos
 - `uv run pytest` — tests

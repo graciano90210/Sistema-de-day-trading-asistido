@@ -189,3 +189,34 @@ def test_double_bottom_detected():
     s = double(_five_min_path(pts), ctx(atr=2.0), P2)
     assert len(s) == 1 and s[0].side == 1
     assert abs(s[0].entry_level - 101.01) < 0.02 and s[0].stop < 100.05
+
+
+def test_live_patterns_matches_backtest_function():
+    """`contexto` usa exactamente las funciones del backtest; aquí con barras sin available_at (como llegan de Alpaca)."""
+    from datetime import datetime, timedelta
+
+    import numpy as np
+
+    from daytrader.config import load_yaml
+    from daytrader.execution.context import live_patterns
+
+    rng = np.random.default_rng(3)
+    open_utc = datetime(2025, 3, 3, 14, 30)
+    rows, c = [], 100.0
+    for i in range(300):
+        o = c
+        c = o * (1 + rng.normal(0, 0.002))
+        rows.append({"ts_utc": open_utc + timedelta(minutes=i), "open": o, "high": max(o, c) * 1.0005,
+                     "low": min(o, c) * 0.9995, "close": c, "volume": float(rng.integers(1_000, 10_000))})  # fmt: skip
+    bars = pl.DataFrame(rows)
+    cfg = load_yaml("strategies.yaml")
+    for k in ("p1_flag", "p2_double"):  # parámetros laxos para que aparezca algo
+        cfg[k] = {**cfg[k], "pole_atr": 0.05, "vol_ratio": 5.0, "tol_atr": 0.5, "depth_atr": 0.05}
+    out = live_patterns(
+        "AAA", bars, open_utc.date(), 100.0, 2.0, open_utc, open_utc + timedelta(hours=6, minutes=30), cfg
+    )
+    assert out, "con parámetros laxos debe aparecer al menos un patrón"
+    for p in out:
+        risk = abs(p["entry"] - p["stop"])
+        assert abs(p["target"] - p["entry"]) == pytest.approx(p["target_r"] * risk)
+        assert p["decided_at"] >= open_utc + timedelta(minutes=30)  # ventana desde las 10:00 ET

@@ -135,6 +135,23 @@ uv run daytrader guard
 Te pregunta si **autorizas el cierre automático de todas las posiciones a las 15:50 ET**. Si respondes `y`,
 a esa hora cancela órdenes y cierra todo, y después sincroniza el journal. Déjalo corriendo.
 
+### 5.3b A mediodía: elegir candidato y dirección (práctica)
+```bash
+uv run daytrader mediodia            # resumen de los 3 mejores candidatos de la watchlist → tú eliges uno
+uv run daytrader contexto APP        # VWAP, rangos, mercado, lecturas, stops candidatos y PATRONES de hoy
+```
+`contexto` muestra además si hoy se confirmó una **bandera (P1)** o un **doble suelo/techo (P2)** con el mismo
+código del backtest de la ronda 4: entrada (orden stop), stop, objetivo y hasta qué hora vale la orden.
+**Son material de práctica: en 2017–2025 no tuvieron edge** (R neto −0,06 y −0,02 por trade). Tú decides
+la dirección y, si operas, lo haces con `trade` (§5.4) usando el stop y el objetivo que muestra.
+
+### 5.3c Lista de momentum (swing, observación)
+```bash
+uv run daytrader momentum            # top 10 por momentum 12−1 de las 500 más líquidas + filtro SPY/SMA200
+```
+Es la hipótesis S1 de la fase 8 (exceso de +1 %/año sobre SPY en validación, **no significativo**, drawdown −40 %).
+Sirve para observar y aprender; no pases estas posiciones por `trade`: el guardián cierra todo a las 15:50.
+
 ### 5.4 Proponer una operación
 ```bash
 uv run daytrader trade NVDA largo --stop 182.50 --objetivo 190 --setup ORB --catalizador earnings
@@ -241,6 +258,8 @@ uv run daytrader dashboard     # http://localhost:8501
 | 1 | ORB 5/15 min y reversión a VWAP, en gappers y en 50 líquidos | −0,06 R |
 | 2 | ORB en *stocks in play* (réplica de Zarattini, Barbon y Aziz 2024), filtro de régimen HMM, meta-labeling LightGBM | −0,04 R |
 | 3 | VWAP con órdenes límite y ajuste walk-forward (12 configuraciones) | −0,05 R (walk-forward) |
+| 4 | Bandera, doble suelo/techo, VWAP, HMM y LightGBM con 10 años (2017–2025, universo sin sesgo de supervivencia) | −0,02 R (doble suelo) |
+| 8 | Swing diario: momentum 12−1, reversión semanal, deriva tras shock de volumen, RSI(2) | momentum +1 %/año vs SPY (no significativo) |
 
 - **Sin ningún costo**, ninguna configuración tiene un R medio distinto de cero → las señales no predicen.
 - El paper de *stocks in play* solo se reproduce con ejecución perfecta y gratuita; con ejecución realista
@@ -258,7 +277,7 @@ uv run daytrader dashboard     # http://localhost:8501
 1. Escribe un pre-registro en `docs/` (hipótesis, parámetros, regla de decisión) y haz commit **antes** de correrla.
 2. Añade la variante en `config/strategies.yaml` (sin tocar las existentes).
 3. Corre solo en el periodo de desarrollo: `uv run daytrader backtest --strategies <nombre> --universes gappers`.
-4. Suma el intento al conteo para el Deflated Sharpe (hoy N = 25).
+4. Suma el intento al conteo para el Deflated Sharpe (hoy N = 34).
 5. Solo si pasa la regla de promoción, se evalúa **una vez** en el OOS 2026.
 
 ---

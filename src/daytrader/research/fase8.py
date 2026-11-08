@@ -47,12 +47,12 @@ LABELS = {"S1": "S1 momentum 12−1", "S2": "S2 reversión semanal", "S3": "S3 d
 
 
 # ------------------------------------------------------------------ datos
-def universe(hist: Store, n: int = UNIVERSE_N) -> pl.DataFrame:
+def universe(hist: Store, n: int = UNIVERSE_N, years: range | None = None) -> pl.DataFrame:
     """Top `n` acciones comunes por $ volumen medio del año Y−1 (≥ 200 sesiones, último cierre ≥ $5)."""
     from daytrader.scanner.universe import VALID_SYMBOL
 
     parts = []
-    for y in range(FIRST_YEAR, LAST_YEAR + 1):
+    for y in years or range(FIRST_YEAR, LAST_YEAR + 1):
         q = hist.query(
             "SELECT b.symbol, avg(b.close * b.volume) AS adv_usd, arg_max(b.close, b.session_date) AS last_close, "
             "count(*) AS n FROM bars_1d b JOIN assets a ON a.symbol = b.symbol AND a.is_common "

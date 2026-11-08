@@ -952,6 +952,79 @@ def fase8() -> None:
     say(f"Reporte: {cfg.reports_path / 'fase8_swing.md'}")
 
 
+@app.command()
+def momentum(
+    top: Annotated[int, typer.Option(help="Cuántas acciones listar")] = 10,
+) -> None:
+    """Lista de práctica S1 (momentum 12−1, fase 8) con datos de hoy. SIN edge probado: solo observación/práctica."""
+    from datetime import UTC, datetime, timedelta
+
+    from rich.table import Table
+
+    from daytrader.config import load_yaml
+    from daytrader.data.alpaca_client import make_multi_fetcher
+    from daytrader.market_calendar import ET
+    from daytrader.research.fase8 import universe
+    from daytrader.strategies import swing
+
+    cfg = load_config()
+    rcfg = load_yaml("risk.yaml")
+    key, secret = Secrets().require_alpaca()
+    today = datetime.now(UTC).astimezone(ET).date()
+    with Store(cfg.db_path.parent / "history.duckdb", read_only=True) as hist:
+        uni = universe(hist, years=range(today.year, today.year + 1))  # top 500 por $ volumen del año anterior
+    syms = sorted(set(uni["symbol"].to_list()) | {"SPY"})
+    fetch = make_multi_fetcher(key, secret, adjustment="split")
+    start = datetime(today.year - 1, today.month, 1) - timedelta(days=330)  # 13+ meses y SMA200 de SPY
+    end = datetime.now(UTC).replace(tzinfo=None) - timedelta(minutes=16)
+    console.print(f"Descargando diarias de {len(syms)} símbolos…")
+    raw = pl.concat([fetch(syms[i : i + 100], "1d", start, end) for i in range(0, len(syms), 100)])
+    daily = raw.with_columns(
+        pl.col("ts_utc").dt.replace_time_zone("UTC").dt.convert_time_zone("America/New_York").dt.date()
+        .alias("session_date")
+    ).select("symbol", "session_date", "open", "high", "low", "close", "volume")  # fmt: skip
+    ind = swing.indicators(daily)
+    spy = ind.filter(pl.col("symbol") == "SPY")
+    sessions = spy["session_date"].to_list()
+    p = {"lookback_months": 12, "skip_months": 1, "top": top}
+    tg = swing.s1_momentum(ind, uni, spy, sessions, p)
+    if not tg:
+        console.print("Sin datos suficientes.")
+        return
+    d = max(tg)
+    srow = spy.filter(pl.col("session_date") == d).row(0, named=True)
+    filt = srow["close"] > (srow["sma200"] or float("inf"))
+    me = swing.month_ends(sessions)
+    i = me.index(d)
+    a, b = me[i - 1], me[i - 12]
+    ca = ind.filter(pl.col("session_date") == a).select("symbol", pl.col("close").alias("ca"))
+    cb = ind.filter(pl.col("session_date") == b).select("symbol", pl.col("close").alias("cb"))
+    now = ind.filter(pl.col("session_date") == d).select("symbol", "close", "atr14")
+    rank = (
+        uni.select("symbol").join(now, on="symbol").join(ca, on="symbol").join(cb, on="symbol")
+        .with_columns((pl.col("ca") / pl.col("cb") - 1).alias("mom"))
+        .sort(["mom", "symbol"], descending=[True, False]).head(top)
+    )  # fmt: skip
+    cap = float(rcfg.get("simulated_capital", 100_000))
+    tab = Table(title=f"S1 momentum 12−1 · ranking al {d} (retorno {b} → {a})")
+    for col in ("#", "Símbolo", "Momentum", "Precio", "ATR %", f"Acciones (${cap / top:,.0f} c/u, fracc.)"):
+        tab.add_column(col, justify="right")
+    for k, r in enumerate(rank.iter_rows(named=True), 1):
+        tab.add_row(str(k), r["symbol"], f"{r['mom']:+.0%}", f"{r['close']:,.2f}", f"{r['atr14'] / r['close']:.1%}",
+                    f"{cap / top / r['close']:.2f}")  # fmt: skip
+    console.print(tab)
+    console.print(
+        f"Filtro de mercado: SPY {srow['close']:.2f} vs SMA200 {srow['sma200'] or 0:.2f} → "
+        + ("[green]encima: la regla compraría la lista[/]" if filt else "[red]debajo: la regla estaría en EFECTIVO[/]")
+    )
+    console.print(
+        "[dim]Regla S1: se rebalancea el último día hábil de cada mes, entrada en la apertura siguiente, 1 mes. "
+        "Fase 8: exceso vs SPY +1 %/año en validación, no significativo, drawdown −40 %. SIN edge probado: "
+        "úsala como lista de observación y práctica, no como recomendación. Las posiciones swing no pasan por "
+        "`daytrader trade` (el guard cierra todo a las 15:50).[/]"
+    )
+
+
 @app.command(name="is-session")
 def is_session_cmd() -> None:
     """Sale con código 0 si hoy (hora de Nueva York) hay sesión NYSE; 1 si no (festivo o fin de semana)."""
@@ -1051,6 +1124,27 @@ def contexto(
         if st_:
             txt = " · ".join(f"{n} {v:.2f} ({abs(v / c.price - 1):.2%})" for n, v in st_)
             console.print(f"  Stops candidatos si vas {name}: {txt}")
+    from daytrader.config import load_yaml
+    from daytrader.execution.context import live_patterns
+
+    rth = bars.filter(
+        (pl.col("symbol") == sym) & (pl.col("ts_utc") >= open_utc) & (pl.col("ts_utc") < s["close_utc"][-1])
+    )
+    pats = live_patterns(
+        sym, rth, today, c.prev_close, c.atr14, open_utc, s["close_utc"][-1], load_yaml("strategies.yaml")
+    )
+    console.print("\n[bold]Patrones de hoy[/] (ronda 4 · práctica: SIN edge probado en 2017–2025):")
+    if not pats:
+        console.print("  [dim]Ninguna bandera ni doble suelo/techo confirmado hoy (10:00–15:00 ET, velas de 5 min).[/]")
+    for p in pats:
+        side = "[green]▲ largo[/]" if p["side"] == 1 else "[red]▼ corto[/]"
+        hhmm = lambda t: t.replace(tzinfo=UTC).astimezone(ET).strftime("%H:%M")  # noqa: E731
+        vigente = "vigente" if now < p["valid_until"] else "caducada"
+        console.print(
+            f"  {side} {p['pattern']} confirmado {hhmm(p['decided_at'])} ET · entrada stop {p['entry']:.2f} · "
+            f"stop {p['stop']:.2f} · objetivo {p['target']:.2f} ({p['target_r']:.0f} R) · orden válida hasta "
+            f"{hhmm(p['valid_until'])} ({vigente}) · salida por tiempo {p['max_hold_min']} min"
+        )
     console.print(
         "[dim]Recuerda: el stop va donde tu idea queda invalidada; si no lo ves claro, no operar también es una decisión.[/]"
     )

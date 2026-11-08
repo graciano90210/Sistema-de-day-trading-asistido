@@ -109,3 +109,40 @@ def candidate_stops(c: Context, side: int) -> list[tuple[str, float]]:
           "máximo pre-market": c.pm_high}  # fmt: skip
     out = [(k, v) for k, v in lv.items() if v and (v - c.price) * side < 0 and abs(v / c.price - 1) >= 0.002]
     return sorted(out, key=lambda kv: abs(kv[1] - c.price))[:3]
+
+
+def live_patterns(symbol: str, rth_bars: pl.DataFrame, session_date, prev_close: float | None, atr14: float | None,
+                  open_utc: datetime, close_utc: datetime, strat_cfg: dict) -> list[dict]:  # fmt: skip
+    """Patrones P1 (bandera) y P2 (doble suelo/techo) de la ronda 4 sobre las barras 1 min de HOY (RTH).
+
+    Mismo código que el backtest (velas de 5 min completas, sin lookahead). Ronda 4: SIN edge probado
+    (R neto −0,06 / −0,02; R bruto +0,035 / +0,021). Es material de práctica, no una señal operable.
+    """
+    from daytrader.strategies.base import DayContext
+    from daytrader.strategies.patterns import double, flag
+
+    if rth_bars.is_empty() or not atr14 or not prev_close:
+        return []
+    if "trade_count" not in rth_bars.columns:
+        rth_bars = rth_bars.with_columns(pl.lit(0, dtype=pl.Int64).alias("trade_count"))
+    if "vwap" not in rth_bars.columns:
+        rth_bars = rth_bars.with_columns(pl.col("close").alias("vwap"))
+    b = rth_bars.with_columns(
+        (pl.col("ts_utc") + timedelta(minutes=1)).alias("available_at"),
+        pl.lit("rth").alias("session"),
+        pl.lit(symbol).alias("symbol"),
+        pl.lit(session_date).alias("session_date"),
+    )
+    ctx = DayContext(symbol=symbol, session_date=session_date, prev_close=prev_close, gap=None, atr14=atr14,
+                     open_utc=open_utc, close_utc=close_utc)  # fmt: skip
+    out = []
+    for key, fn, label in (("p1_flag", flag, "Bandera (P1)"), ("p2_double", double, "Doble suelo/techo (P2)")):
+        p = {**strat_cfg[key], "name": key}
+        for s in fn(b, ctx, p):
+            entry, off = s.entry_level, s.stop_offset
+            out.append({
+                "pattern": label, "side": s.side, "decided_at": s.decided_at, "valid_until": s.valid_until,
+                "entry": entry, "stop": entry - s.side * off, "target": entry + s.side * s.target_r * off,
+                "target_r": s.target_r, "max_hold_min": int(p["max_hold_min"]),
+            })  # fmt: skip
+    return out
