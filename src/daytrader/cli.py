@@ -923,6 +923,35 @@ def round4() -> None:
     say(f"Reporte: {cfg.reports_path / 'ronda4.md'}")
 
 
+@app.command()
+def fase8() -> None:
+    """Fase 8 pre-registrada: swing trading con barras diarias (data/history.duckdb) → reports/fase8_swing.md"""
+    import glob
+
+    from daytrader.config import ROOT
+    from daytrader.research.fase8 import N_TRIALS, render, run_fase8, summary_lines
+    from daytrader.research.round4 import prior_sharpes
+
+    logging.basicConfig(level=logging.WARNING)
+    cfg = load_config()
+    say = lambda m: console.print(f"[{datetime.now():%H:%M:%S}] {m}")  # noqa: E731
+    bt_dir = ROOT / "data" / "backtests"
+    prior = prior_sharpes(sorted(glob.glob(str(bt_dir / "*__*_2025-12-31.parquet")))
+                          + sorted(glob.glob(str(bt_dir / "r[234]_*.parquet"))))  # fmt: skip
+    say(f"Sharpe de {len(prior)} intentos previos guardados (N total = {N_TRIALS})")
+    with Store(cfg.db_path.parent / "history.duckdb", read_only=True) as hist:
+        res = run_fase8(hist, prior, on_step=say)
+    for n in ("S1", "S2", "S3", "S4"):
+        t = res["runs"][n]["trades"]
+        if not t.is_empty():
+            t.write_parquet(bt_dir / f"f8_{n}_trades.parquet")
+        res["runs"][n]["eq"].write_parquet(bt_dir / f"f8_{n}_equity.parquet")
+    (cfg.reports_path / "fase8_swing.md").write_text(render(res))
+    for line in summary_lines(res):
+        say(line)
+    say(f"Reporte: {cfg.reports_path / 'fase8_swing.md'}")
+
+
 @app.command(name="is-session")
 def is_session_cmd() -> None:
     """Sale con código 0 si hoy (hora de Nueva York) hay sesión NYSE; 1 si no (festivo o fin de semana)."""
