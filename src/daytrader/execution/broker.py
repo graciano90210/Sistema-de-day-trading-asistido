@@ -87,6 +87,62 @@ class PaperBroker:
                else MarketOrderRequest(**common))  # fmt: skip
         return self.client.submit_order(req)
 
+    def exit_info(self, symbol: str) -> dict | None:
+        """Orden de salida (stop) abierta de una posición del sistema: id, stop, qty, lado y huella del ticket."""
+        for o in self.client.get_orders(GetOrdersRequest(status=QueryOrderStatus.OPEN, nested=True, symbols=[symbol])):
+            coid = str(o.client_order_id or "")
+            cands = [o, *(o.legs or [])]
+            for x in cands:
+                kind = str(getattr(x.order_type, "value", x.order_type)).lower()
+                if kind == "stop" and x.stop_price is not None:
+                    fp = coid.split("-")[1] if coid.startswith(("dt-", "dx-")) else None
+                    if fp is None:  # stop de un bracket/OTO: la huella está en la orden de entrada (ya ejecutada)
+                        today = datetime.now(UTC).date()
+                        for parent in self.orders_since(today):
+                            pc = str(parent.client_order_id or "")
+                            if pc.startswith("dt-") and any(lg.id == x.id for lg in parent.legs or []):
+                                fp = pc.split("-")[1]
+                                break
+                    side = str(getattr(x.side, "value", x.side)).lower()  # lado de la SALIDA
+                    return {"order_id": x.id, "stop": float(x.stop_price), "qty": float(x.qty), "fingerprint": fp,
+                            "exit_side": side, "has_target": coid.startswith("dx-")}  # fmt: skip
+        return None
+
+    def set_target(self, symbol: str, target: float, client_order_id: str) -> object:
+        """Reemplaza el stop de una posición por una OCO (objetivo límite + el MISMO stop). Solo tras y/n.
+
+        Si la OCO falla, vuelve a poner el stop original: la posición nunca queda sin stop más que unos segundos.
+        """
+        import time as _t
+
+        from alpaca.trading.requests import StopOrderRequest
+
+        info = self.exit_info(symbol)
+        if info is None:
+            raise RuntimeError(f"{symbol}: no hay orden de stop abierta del sistema")
+        side = OrderSide.SELL if info["exit_side"] == "sell" else OrderSide.BUY
+        self.client.cancel_order_by_id(info["order_id"])
+        for _ in range(20):  # esperar a que Alpaca confirme la cancelación (libera las acciones)
+            st = str(getattr(self.client.get_order_by_id(info["order_id"]).status, "value", "")).lower()
+            if st in ("canceled", "cancelled", "filled", "expired"):
+                break
+            _t.sleep(0.5)
+        if st == "filled":
+            raise RuntimeError(f"{symbol}: el stop se ejecutó mientras se cambiaba; posición cerrada")
+        qty = int(info["qty"])
+        try:
+            return self.client.submit_order(LimitOrderRequest(
+                symbol=symbol, qty=qty, side=side, time_in_force=TimeInForce.DAY, limit_price=_r2(target),
+                order_class=OrderClass.OCO, take_profit=TakeProfitRequest(limit_price=_r2(target)),
+                stop_loss=StopLossRequest(stop_price=_r2(info["stop"])), client_order_id=client_order_id,
+            ))  # fmt: skip
+        except Exception:
+            self.client.submit_order(StopOrderRequest(
+                symbol=symbol, qty=qty, side=side, time_in_force=TimeInForce.DAY, stop_price=_r2(info["stop"]),
+                client_order_id=client_order_id + "-s",
+            ))  # fmt: skip
+            raise
+
     def cancel_pending_entries(self) -> int:
         """Cancela órdenes de ENTRADA del sistema (prefijo dt-) que aún no se ejecutaron. Devuelve cuántas."""
         n = 0

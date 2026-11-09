@@ -36,6 +36,17 @@ def build_trades(orders: list, tickets: dict[str, dict]) -> list[dict]:
             if _val(leg.status) == "filled":
                 exit_px, exit_ts = _f(leg.filled_avg_price), leg.filled_at
                 reason = "objetivo" if "limit" in _val(leg.order_type) else "stop"
+        if exit_px is None:  # salida por la OCO del comando `objetivo` (prefijo dx-<huella>-)
+            for x in orders:
+                if not str(x.client_order_id or "").startswith(f"dx-{fp}-"):
+                    continue
+                if _val(x.status) == "filled":
+                    kind = "objetivo" if "limit" in _val(x.order_type) else "stop"
+                    exit_px, exit_ts, reason = _f(x.filled_avg_price), x.filled_at, kind
+                for leg in x.legs or []:
+                    if _val(leg.status) == "filled":
+                        kind = "objetivo" if "limit" in _val(leg.order_type) else "stop"
+                        exit_px, exit_ts, reason = _f(leg.filled_avg_price), leg.filled_at, kind
         if exit_px is None:  # cerrada por el cierre forzado (orden sin prefijo dt-)
             cands = [c for c in flat if c.symbol == o.symbol and c.filled_at and entry_ts and c.filled_at > entry_ts]
             if cands:

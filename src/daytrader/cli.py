@@ -672,6 +672,61 @@ def flatten() -> None:
 
 
 @app.command()
+def objetivo(
+    symbol: Annotated[str, typer.Argument(help="Ticker con posición abierta")],
+    precio: Annotated[float, typer.Argument(help="Precio objetivo (techo para largos, piso para cortos)")],
+) -> None:
+    """Pone un objetivo a una posición abierta: OCO (objetivo límite + el mismo stop). Pide confirmación y/n."""
+    import uuid
+
+    from rich.table import Table
+
+    from daytrader.execution.executor import ask_yes_no
+
+    cfg, rcfg, broker, journal, ses, now, today = _exec_ctx()
+    sym = symbol.upper()
+    pos = next((p for p in broker.positions() if p["symbol"] == sym), None)
+    info = broker.exit_info(sym) if pos else None
+    if pos is None or info is None:
+        console.print(f"[red]{sym}: no hay posición abierta con stop del sistema.[/]")
+        journal.close()
+        raise typer.Exit(1)
+    d = 1 if pos["qty"] > 0 else -1
+    q = broker.quote(sym)
+    px = q["bid"] if d == 1 else q["ask"]
+    entry, stop, qty = pos["avg_entry"], info["stop"], abs(pos["qty"])
+    if (precio - px) * d <= 0:
+        console.print(f"[red]El objetivo debe estar {'por encima' if d == 1 else 'por debajo'} del precio actual "
+                      f"({px:.2f}); si quieres salir ya, usa flatten.[/]")  # fmt: skip
+        journal.close()
+        raise typer.Exit(1)
+    risk = abs(entry - stop)
+    tab = Table(title=f"OBJETIVO {sym} · CUENTA PAPER", show_header=False)
+    for k, v in [("Posición", f"{'LARGO' if d == 1 else 'CORTO'} {qty:g} @ {entry:.2f}"),
+                 ("Precio actual", f"{px:.2f} ({'bid' if d == 1 else 'ask'} IEX)"),
+                 ("Stop (se mantiene)", f"{stop:.2f}"),
+                 ("Objetivo nuevo", f"{precio:.2f}  → {(precio - entry) * d / risk:+.2f} R desde la entrada"),
+                 ("Ganancia si lo toca", f"${(precio - entry) * d * qty:+,.2f}"),
+                 ("Orden", "OCO: límite en el objetivo + stop; al ejecutarse una se cancela la otra")]:  # fmt: skip
+        tab.add_row(k, v)
+    console.print(tab)
+    if ask_yes_no("¿Poner este objetivo en la cuenta PAPER? (y/n) [60s]: ", 60) != "y":
+        console.print("No se cambió nada.")
+        journal.close()
+        return
+    fp = info["fingerprint"] or "manual"
+    coid = f"dx-{fp}-{uuid.uuid4().hex[:8]}"
+    try:
+        o = broker.set_target(sym, precio, coid)
+        console.print(f"[green]Objetivo puesto[/]: {sym} límite {precio:.2f} · stop {stop:.2f} · orden {o.id}")
+        if info["fingerprint"]:
+            journal.note(info["fingerprint"], f"objetivo {precio:.2f} añadido (OCO {coid})", kind="objetivo")
+    except Exception as e:  # noqa: BLE001
+        console.print(f"[red]No se pudo poner el objetivo: {e}[/]. Revisa en Alpaca que el stop siga activo.")
+    journal.close()
+
+
+@app.command()
 def sync(day: Annotated[str | None, typer.Option("--date")] = None) -> None:
     """Trae las ejecuciones de Alpaca paper al journal (precio real, R, slippage real)."""
     from daytrader.execution.sync import sync_day
