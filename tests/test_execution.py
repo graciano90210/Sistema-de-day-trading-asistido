@@ -247,3 +247,32 @@ def test_pdt_can_be_disabled_for_practice():
     )
     t = build_ticket("XYZ", "short", 50.0, 51.0, 48.0, acc, cfg, NOW)
     assert check(t, acc, SES, cfg, NOW).ok
+
+
+def test_snapshots_and_learning_use_only_pre_entry_snapshots():
+    import polars as pl
+
+    from daytrader.execution.journal import Journal
+    from daytrader.execution.learn import group_stats, trade_features
+
+    j = Journal(":memory:")
+    j.snapshot([{"source": "mediodia", "symbol": "AAA", "starred": True, "score": 2.0, "up": 6, "down": 0,
+                 "verdict": "largo", "catalyst": "earnings"}])  # fmt: skip
+    snaps = j.query("SELECT * FROM snapshots")
+    assert snaps.height == 1 and snaps["starred"][0]
+    d = snaps["session_date"][0]
+    ts = snaps["ts"][0]
+    later = ts.replace(year=ts.year + 1)
+    snaps = pl.concat([snaps, snaps.with_columns(pl.lit(later).alias("ts"), pl.lit(False).alias("starred"),
+                                                 pl.lit("corto").alias("verdict"))])  # fmt: skip
+    trades = pl.DataFrame({"fingerprint": ["f1", "f2"], "session_date": [d, d], "symbol": ["AAA", "AAA"],
+                           "side": ["long", "long"], "entry_ts": [ts.replace(year=ts.year + 2), ts],
+                           "r_multiple": [1.5, -1.0]})  # fmt: skip
+    tickets = pl.DataFrame({"fingerprint": ["f1", "f2"], "setup": ["P2", None], "catalyst": [None, "fda"]})
+    f = trade_features(trades, tickets, snaps).sort("fingerprint")
+    # f1 entró después de la segunda foto → la usa (fuera del top 3, contra las lecturas)
+    assert f["seleccion"].to_list() == ["fuera del top 3", "★ top 3"]
+    assert f["vs_lecturas"].to_list() == ["contra las lecturas", "a favor de las lecturas"]
+    assert f["catalizador"].to_list() == ["earnings", "fda"]  # ticket > mediodía
+    st = group_stats(f, "lado")
+    assert st["n"][0] == 2 and st["r_medio"][0] == pytest.approx(0.25) and not st["concluyente"][0]

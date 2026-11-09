@@ -672,6 +672,42 @@ def flatten() -> None:
 
 
 @app.command()
+def aprendizaje() -> None:
+    """Qué funciona en TUS trades: R por selección (★), catalizador, lecturas, patrón, setup y lado."""
+    from rich.table import Table
+
+    from daytrader.execution.journal import Journal
+    from daytrader.execution.learn import MIN_N, group_stats, trade_features
+
+    cfg = load_config()
+    j = Journal(cfg.db_path.parent / "journal.duckdb")
+    df = trade_features(j.query("SELECT * FROM trades"), j.query("SELECT * FROM tickets"),
+                        j.query("SELECT * FROM snapshots"))  # fmt: skip
+    j.close()
+    if df.is_empty():
+        console.print("Aún no hay trades cerrados sincronizados. Después del cierre: [bold]uv run daytrader sync[/].")
+        return
+    console.print(f"[bold]{df.height} trades cerrados[/] · R medio {df['r_multiple'].mean():+.2f} · "
+                  f"R total {df['r_multiple'].sum():+.2f}")  # fmt: skip
+    for col, title in (("seleccion", "Selección de mediodía"), ("catalizador", "Catalizador"),
+                       ("vs_lecturas", "Dirección frente a las lecturas"), ("acuerdo", "Acuerdo de las lecturas"),
+                       ("patron", "Patrón P1/P2 visto en contexto"), ("setup", "Setup"), ("lado", "Lado")):  # fmt: skip
+        st = group_stats(df, col)
+        tab = Table(title=title)
+        for h in ("grupo", "n", "R medio", "IC 95 %", "win rate", "R total", ""):
+            tab.add_column(h, justify="right" if h not in ("grupo", "") else "left")
+        for r in st.iter_rows(named=True):
+            ic = "—" if r["ic_bajo"] != r["ic_bajo"] else f"[{r['ic_bajo']:+.2f}, {r['ic_alto']:+.2f}]"
+            flag = ("[green]diferente de 0[/]" if r["concluyente"] else
+                    f"[dim]n < {MIN_N}: no concluyente[/]" if r["n"] < MIN_N else "[dim]compatible con 0[/]")  # fmt: skip
+            tab.add_row(str(r["grupo"]), str(r["n"]), f"{r['r_medio']:+.2f}", ic, f"{r['win_rate']:.0%}",
+                        f"{r['r_total']:+.2f}", flag)  # fmt: skip
+        console.print(tab)
+    console.print(f"[dim]Con muchos cortes, alguno parecerá bueno por azar. Un grupo cuenta solo con n ≥ {MIN_N} y un IC "
+                  "que no incluye 0; aun así, antes de cambiar una regla se pre-registra y se prueba con historia.[/]")  # fmt: skip
+
+
+@app.command()
 def objetivo(
     symbol: Annotated[str, typer.Argument(help="Ticker con posición abierta")],
     precio: Annotated[float, typer.Argument(help="Precio objetivo (techo para largos, piso para cortos)")],
@@ -919,6 +955,12 @@ def mediodia(
                               float(b["volume"].sum()), elapsed, q["bid"], q["ask"], acc.equity,
                               rcfg.risk_per_trade, rcfg.account_type != "cash"))  # fmt: skip
     best = {c.symbol for c in top3(cands)}
+    Journal(cfg.db_path.parent / "journal.duckdb").snapshot([
+        {"source": "mediodia", "symbol": c.symbol, "starred": c.symbol in best, "score": c.score, "gap_am": c.gap_am,
+         "change": c.change, "rvol": c.rvol_rth, "range_atr": c.range_atr, "spread_pct": c.spread_pct, "up": c.up,
+         "down": c.down, "catalyst": c.catalyst, "verdict": c.lean}
+        for c in cands
+    ])  # fmt: skip
     tab = Table(
         title=f"Watchlist re-evaluada · {datetime.now(UTC).astimezone(ET):%H:%M} ET · capital ${acc.equity:,.0f}"
     )
@@ -1190,6 +1232,14 @@ def contexto(
     pats = live_patterns(
         sym, rth, today, c.prev_close, c.atr14, open_utc, s["close_utc"][-1], load_yaml("strategies.yaml")
     )
+    from daytrader.execution.journal import Journal
+
+    Journal(load_config().db_path.parent / "journal.duckdb").snapshot([{
+        "source": "contexto", "symbol": sym, "up": up, "down": dn,
+        "verdict": "largo" if up - dn >= 2 else "corto" if dn - up >= 2 else "mixto",
+        "change": (c.price / c.prev_close - 1) if c.prev_close else None,
+        "patterns": "; ".join(f"{p['pattern']} {'largo' if p['side'] == 1 else 'corto'}" for p in pats) or None,
+    }])  # fmt: skip
     console.print("\n[bold]Patrones de hoy[/] (ronda 4 · práctica: SIN edge probado en 2017–2025):")
     if not pats:
         console.print("  [dim]Ninguna bandera ni doble suelo/techo confirmado hoy (10:00–15:00 ET, velas de 5 min).[/]")

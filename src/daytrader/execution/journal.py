@@ -29,7 +29,16 @@ CREATE TABLE IF NOT EXISTS notes (
     fingerprint VARCHAR, ts TIMESTAMP, kind VARCHAR, text VARCHAR   -- kind: nota | error
 );
 CREATE TABLE IF NOT EXISTS events (ts TIMESTAMP, kind VARCHAR, detail VARCHAR);
+-- Foto de lo que mostraban `mediodia` / `contexto` al decidir (para medir después qué funciona con tus trades).
+CREATE TABLE IF NOT EXISTS snapshots (
+    ts TIMESTAMP, session_date DATE, source VARCHAR, symbol VARCHAR, starred BOOLEAN, score DOUBLE,
+    gap_am DOUBLE, change DOUBLE, rvol DOUBLE, range_atr DOUBLE, spread_pct DOUBLE, up INTEGER, down INTEGER,
+    catalyst VARCHAR, verdict VARCHAR, patterns VARCHAR
+);
 """
+
+SNAPSHOT_COLS = ["source", "symbol", "starred", "score", "gap_am", "change", "rvol", "range_atr", "spread_pct", "up",
+                 "down", "catalyst", "verdict", "patterns"]  # fmt: skip
 
 
 def _now() -> datetime:
@@ -101,6 +110,23 @@ class Journal:
             raise ValueError("kind debe ser 'nota' o 'error'")
         with self._c() as con:
             con.execute("INSERT INTO notes VALUES (?, ?, ?, ?)", [fingerprint, _now(), kind, text])
+
+    def snapshot(self, rows: list[dict]) -> None:
+        """Guarda la foto de candidatos/lecturas (sin efecto en órdenes). Columnas en SNAPSHOT_COLS."""
+        if not rows:
+            return
+        now = _now()
+        recs = [{"ts": now, "session_date": _et_date(now), **{c: r.get(c) for c in SNAPSHOT_COLS}} for r in rows]
+        df = pl.DataFrame(recs, schema={"ts": pl.Datetime("us"), "session_date": pl.Date, "source": pl.Utf8,
+                                        "symbol": pl.Utf8, "starred": pl.Boolean, "score": pl.Float64,
+                                        "gap_am": pl.Float64, "change": pl.Float64, "rvol": pl.Float64,
+                                        "range_atr": pl.Float64, "spread_pct": pl.Float64, "up": pl.Int32,
+                                        "down": pl.Int32, "catalyst": pl.Utf8, "verdict": pl.Utf8,
+                                        "patterns": pl.Utf8})  # fmt: skip
+        with self._c() as con:
+            con.register("_s", df)
+            con.execute("INSERT INTO snapshots BY NAME SELECT * FROM _s")
+            con.unregister("_s")
 
     def trades_today(self, day) -> int:
         with self._c() as con:
