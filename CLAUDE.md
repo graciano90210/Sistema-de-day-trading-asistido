@@ -7,8 +7,12 @@ Sistema de trading intradía para acciones de EE. UU. Investigación y paper tra
    Si algún código pudiera tocar una cuenta real: detenerse y avisar. `daytrader.config.assert_paper_url`
    es el único punto de entrada permitido para URLs de trading; `tests/test_safety.py` lo vigila.
 2. Toda orden requiere confirmación explícita del usuario en consola (y/n), incluso en paper.
+   Excepción autorizada por el usuario (2026-11-09, permanente): cierre automático diario de TODAS las
+   posiciones paper ~10 min antes del cierre por `cloud/flatten_job.py` (Heroku Scheduler). Interruptor:
+   Config Var `DAYTRADER_AUTO_FLATTEN=1`. Solo cierra (reduce riesgo); nunca abre posiciones.
 3. Los números los calcula Python, nunca el LLM "a ojo". El LLM interpreta y explica.
 4. API keys solo en `.env` (ignorado por git). Nunca en código, YAML, tests ni commits.
+   Excepción autorizada (2026-11-09): las keys PAPER también en las Config Vars de Heroku (nunca las live).
 5. Cero lookahead bias: toda señal usa solo datos con `available_at <= t`.
    Acceder a barras SIEMPRE vía `daytrader.data.access` (point-in-time), nunca leyendo tablas a mano en estrategias.
 6. Trabajo por fases: al terminar cada fase, detenerse, mostrar resultados y esperar OK.

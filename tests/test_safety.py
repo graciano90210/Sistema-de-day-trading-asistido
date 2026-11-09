@@ -9,7 +9,7 @@ import pytest
 
 from daytrader.config import PAPER_TRADING_URL, ROOT, LiveTradingForbidden, assert_paper_url
 
-CODE_DIRS = [ROOT / "src", ROOT / ".claude", ROOT / "config"]
+CODE_DIRS = [ROOT / "src", ROOT / ".claude", ROOT / "config", ROOT / "cloud"]
 CODE_EXT = {".py", ".yaml", ".yml", ".toml", ".md", ".json"}
 
 
