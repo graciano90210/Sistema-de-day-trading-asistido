@@ -39,6 +39,7 @@ class RiskConfig:
     pdt_max_day_trades: int = 3
     small_margin_mult: float = 2.0
     enforce_pdt: bool = True  # False = práctica: se ignora el límite de day trades (tamaño y 2× se mantienen)
+    daily_profit_target: float | None = None  # $: al alcanzarlo se cierra todo y no hay más entradas ese día
 
 
 @dataclass(frozen=True)
@@ -170,6 +171,10 @@ def check(
     day_pnl = account.equity - account.last_equity
     if day_pnl <= -cfg.daily_loss_limit * account.last_equity:
         r.append(f"KILL SWITCH: PnL del día {day_pnl:,.2f} <= -{cfg.daily_loss_limit:.0%}")
+    if cfg.daily_profit_target and day_pnl >= cfg.daily_profit_target:
+        r.append(
+            f"meta del día alcanzada: PnL {day_pnl:+,.2f} >= ${cfg.daily_profit_target:,.0f} (no más entradas hoy)"
+        )
     if account.trades_today >= cfg.max_trades_per_day:
         r.append(f"máximo de {cfg.max_trades_per_day} trades por día alcanzado")
     if account.open_positions >= cfg.max_positions:

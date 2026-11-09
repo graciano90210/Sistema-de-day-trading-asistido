@@ -631,7 +631,8 @@ def guard() -> None:
         return
     h, m = (int(x) for x in rcfg.flatten_et.split(":"))
     flat_at = min(et_to_utc_naive(today, dtime(h, m)), ses.close_utc - _td(minutes=10))
-    ans = ask_yes_no(f"¿Autorizas cerrar TODAS las posiciones paper a las {rcfg.flatten_et} ET? (y/n): ", 120)
+    meta = f" o al llegar a la meta del día (+${rcfg.daily_profit_target:,.0f})" if rcfg.daily_profit_target else ""
+    ans = ask_yes_no(f"¿Autorizas cerrar TODAS las posiciones paper a las {rcfg.flatten_et} ET{meta}? (y/n): ", 120)
     if ans != "y":
         console.print(
             "[yellow]Sin autorización: guard solo vigilará; deberás cerrar manualmente con 'daytrader flatten'.[/]"
@@ -648,6 +649,13 @@ def guard() -> None:
                     f"[yellow]Canceladas {n} órdenes de entrada pendientes (última entrada {rcfg.no_entries_last_minutes} min antes del cierre).[/]"
                 )
             cancelled = True
+        if ans == "y" and rcfg.daily_profit_target:
+            a = broker.client.get_account()
+            pnl = float(a.equity) - float(a.last_equity)
+            if pnl >= rcfg.daily_profit_target and broker.positions():
+                broker.flatten()
+                journal.event("flatten", f"meta del día alcanzada: PnL {pnl:+.2f}")
+                console.print(f"[green]Meta del día alcanzada (PnL {pnl:+,.2f}): posiciones cerradas.[/]")
         _t.sleep(15)
     if ans == "y":
         broker.flatten()

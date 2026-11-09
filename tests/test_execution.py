@@ -276,3 +276,12 @@ def test_snapshots_and_learning_use_only_pre_entry_snapshots():
     assert f["catalizador"].to_list() == ["earnings", "fda"]  # ticket > mediodía
     st = group_stats(f, "lado")
     assert st["n"][0] == 2 and st["r_medio"][0] == pytest.approx(0.25) and not st["concluyente"][0]
+
+
+def test_daily_profit_target_blocks_new_entries():
+    cfg = replace(CFG, daily_profit_target=60.0)
+    t = ticket(cfg=cfg)
+    assert check(t, replace(ACC, equity=100_059.99), SES, cfg, NOW).ok
+    res = check(t, replace(ACC, equity=100_060), SES, cfg, NOW)
+    assert not res.ok and any("meta del día" in x for x in res.reasons)
+    assert check(ticket(), replace(ACC, equity=100_500), SES, CFG, NOW).ok  # sin meta configurada: no aplica
