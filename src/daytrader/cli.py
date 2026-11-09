@@ -718,11 +718,13 @@ def objetivo(
     coid = f"dx-{fp}-{uuid.uuid4().hex[:8]}"
     try:
         o = broker.set_target(sym, precio, coid)
-        console.print(f"[green]Objetivo puesto[/]: {sym} límite {precio:.2f} · stop {stop:.2f} · orden {o.id}")
-        if info["fingerprint"]:
-            journal.note(info["fingerprint"], f"objetivo {precio:.2f} añadido (OCO {coid})", kind="objetivo")
     except Exception as e:  # noqa: BLE001
         console.print(f"[red]No se pudo poner el objetivo: {e}[/]. Revisa en Alpaca que el stop siga activo.")
+        journal.close()
+        raise typer.Exit(1) from e
+    console.print(f"[green]Objetivo puesto[/]: {sym} límite {precio:.2f} · stop {stop:.2f} · orden {o.id}")
+    if info["fingerprint"]:
+        journal.note(info["fingerprint"], f"objetivo {precio:.2f} añadido (OCO {coid})")
     journal.close()
 
 
