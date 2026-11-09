@@ -6,6 +6,8 @@ Autorización PERMANENTE del usuario (2026-11-09, opción "a"); interruptor: Con
 - Solo PAPER: la URL está fija y se verifica; con cualquier otra URL aborta (regla 1 del proyecto).
 - Usa /v2/clock de Alpaca: sabe si hay sesión hoy y a qué hora cierra (respeta festivos y medias sesiones).
 - Actúa solo si el mercado está abierto y faltan <= WINDOW_MIN minutos para el cierre, y solo si hay posiciones.
+- Meta de ganancia diaria (autorizada 2026-11-09): si DAYTRADER_PROFIT_TARGET > 0 y el PnL del día de la cuenta
+  (equity − last_equity, realizado + flotante) llega a la meta, cierra todo aunque falte para el cierre.
 - Cancela órdenes abiertas y cierra posiciones (DELETE /v2/positions?cancel_orders=true). Idempotente.
 Keys (solo PAPER) en Config Vars: ALPACA_API_KEY, ALPACA_SECRET_KEY. Nunca en el código.
 """
@@ -54,15 +56,29 @@ def run(env: dict | None = None, http=requests, now: datetime | None = None) -> 
     clock = http.get(f"{base}/v2/clock", headers=h, timeout=TIMEOUT)
     clock.raise_for_status()
     now = now or datetime.now(UTC)
-    if not should_flatten(clock.json(), now):
-        return f"fuera de ventana (próximo cierre {clock.json().get('next_close')})"
+    ck = clock.json()
+    in_window = should_flatten(ck, now)
+    target = float(env.get("DAYTRADER_PROFIT_TARGET") or 0)
+    if not in_window and not (target > 0 and ck.get("is_open")):
+        return f"fuera de ventana (próximo cierre {ck.get('next_close')})"
     pos = http.get(f"{base}/v2/positions", headers=h, timeout=TIMEOUT)
     pos.raise_for_status()
     if not pos.json():
-        return "ventana de cierre: sin posiciones"
+        return "sin posiciones"
+    if in_window:
+        reason = "cierre del día"
+    else:
+        acct = http.get(f"{base}/v2/account", headers=h, timeout=TIMEOUT)
+        acct.raise_for_status()
+        a = acct.json()
+        pnl = float(a["equity"]) - float(a["last_equity"])
+        if pnl < target:
+            return f"PnL del día {pnl:+.2f} < meta {target:.2f}: sin cambios"
+        reason = f"meta de ganancia: PnL del día {pnl:+.2f} >= {target:.2f}"
     r = http.delete(f"{base}/v2/positions", params={"cancel_orders": "true"}, headers=h, timeout=TIMEOUT)
     r.raise_for_status()
-    return f"CIERRE: {len(pos.json())} posiciones cerradas y órdenes canceladas ({[p['symbol'] for p in pos.json()]})"
+    syms = [p["symbol"] for p in pos.json()]
+    return f"CIERRE ({reason}): {len(syms)} posiciones cerradas y órdenes canceladas ({syms})"
 
 
 if __name__ == "__main__":
