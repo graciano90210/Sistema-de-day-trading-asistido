@@ -188,6 +188,14 @@ class PaperBroker:
 
         sleep = sleep or _t.sleep
         res = None
+        if not self.client.get_clock().is_open:  # fuera de horario: las ventas quedan en cola para la apertura;
+            # reintentar las cancelaría: un solo intento y sin verificar
+            self.client.cancel_orders()
+            for _ in range(20):
+                if not self.client.get_orders(GetOrdersRequest(status=QueryOrderStatus.OPEN)):
+                    break
+                sleep(0.5)
+            return self.client.close_all_positions(cancel_orders=False)
         for _ in range(tries):
             self.client.cancel_orders()
             for _ in range(20):

@@ -304,3 +304,26 @@ def test_reference_price_ignores_abnormal_iex_spread():
     assert reference_price(normal, None, "long") == 41.46
     assert reference_price(phantom, 41.50, "long") == 41.50
     assert reference_price(phantom, None, "short") == 41.52  # sin último trade: se queda con la cotización
+
+
+def test_sync_looks_back_for_overnight_positions():
+    """Bug 2026-11-10: entrada el día D y salida el D+1 → sync del D+1 debe ver la orden de entrada del D."""
+    from datetime import date
+
+    from daytrader.execution import sync
+
+    seen = {}
+
+    class B:
+        def orders_since(self, day):
+            seen["day"] = day
+            return []
+
+    class J:
+        def query(self, sql):
+            import polars as pl
+
+            return pl.DataFrame({"fingerprint": []})
+
+    sync.sync_day(B(), J(), date(2026, 11, 11))
+    assert seen["day"] <= date(2026, 11, 10)

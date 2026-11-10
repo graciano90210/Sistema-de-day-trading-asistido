@@ -6,8 +6,9 @@ costos del backtester con datos en vivo.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
+LOOKBACK_DAYS = 7  # upsert por huella: re-sincronizar trades ya guardados es inocuo
 
 def _f(x):
     return None if x is None else float(x)
@@ -73,7 +74,8 @@ def sync_day(broker, journal, day: date) -> int:
         r["fingerprint"]: r
         for r in journal.query("SELECT * FROM tickets WHERE status = 'enviado'").iter_rows(named=True)
     }
-    rows = build_trades(broker.orders_since(day), tickets)
+    # mirar atrás: una posición que pasó la noche abierta (p. ej. 2026-11-10 → 11-11) tiene la entrada en otro día
+    rows = build_trades(broker.orders_since(day - timedelta(days=LOOKBACK_DAYS)), tickets)
     for r in rows:
         journal.upsert_trade(r)
     return len(rows)
