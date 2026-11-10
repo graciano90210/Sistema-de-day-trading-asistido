@@ -178,6 +178,26 @@ class PaperBroker:
                 n += 1
         return n
 
-    def flatten(self):
-        """Cancela órdenes abiertas y cierra todas las posiciones (requiere autorización previa del usuario)."""
-        return self.client.close_all_positions(cancel_orders=True)
+    def flatten(self, tries: int = 3, sleep=None):
+        """Cancela órdenes, espera a que se liberen las acciones, cierra todo y VERIFICA (autorización previa).
+
+        Lección 2026-11-10: close_all_positions(cancel_orders=True) canceló stops/OCO pero la venta se rechazó en
+        silencio (acciones retenidas por órdenes en cancelación) → posiciones abiertas sin stop.
+        """
+        import time as _t
+
+        sleep = sleep or _t.sleep
+        res = None
+        for _ in range(tries):
+            self.client.cancel_orders()
+            for _ in range(20):
+                if not self.client.get_orders(GetOrdersRequest(status=QueryOrderStatus.OPEN)):
+                    break
+                sleep(0.5)
+            res = self.client.close_all_positions(cancel_orders=False)
+            for _ in range(20):
+                if not self.client.get_all_positions():
+                    return res
+                sleep(0.5)
+        left = [p.symbol for p in self.client.get_all_positions()]
+        raise RuntimeError(f"flatten: no se pudieron cerrar {left}")

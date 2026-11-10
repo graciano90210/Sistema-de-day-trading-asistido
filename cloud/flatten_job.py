@@ -9,7 +9,7 @@ Autorización PERMANENTE del usuario (2026-11-09, opción "a"); interruptor: Con
 - Meta de ganancia diaria (autorizada 2026-11-09): si DAYTRADER_PROFIT_TARGET > 0 y el PnL del día de la cuenta
   (equity − last_equity, realizado + flotante) llega a la meta, cierra todo aunque falte para el cierre.
 - Pérdida máxima diaria (autorizada 2026-11-10): si DAYTRADER_LOSS_LIMIT > 0 y el PnL del día <= −límite, cierra todo.
-- Cancela órdenes abiertas y cierra posiciones (DELETE /v2/positions?cancel_orders=true). Idempotente.
+- Cancela órdenes, espera a que se liberen, cierra posiciones y VERIFICA que no quede ninguna (close_all). Idempotente.
 Keys (solo PAPER) en Config Vars: ALPACA_API_KEY, ALPACA_SECRET_KEY. Nunca en el código.
 """
 
@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from datetime import UTC, datetime
 
 import requests
@@ -48,7 +49,7 @@ def should_flatten(clock: dict, now: datetime, window_min: int = WINDOW_MIN) -> 
     return 0 < left <= window_min
 
 
-def run(env: dict | None = None, http=requests, now: datetime | None = None) -> str:
+def run(env: dict | None = None, http=requests, now: datetime | None = None, sleep=time.sleep) -> str:
     env = os.environ if env is None else env
     if env.get("DAYTRADER_AUTO_FLATTEN") != "1":
         return "desactivado (DAYTRADER_AUTO_FLATTEN != 1)"
@@ -80,10 +81,39 @@ def run(env: dict | None = None, http=requests, now: datetime | None = None) -> 
             reason = f"pérdida máxima: PnL del día {pnl:+.2f} <= -{loss:.2f}"
         else:
             return f"PnL del día {pnl:+.2f} dentro de [-{loss:.2f}, +{target:.2f}]: sin cambios"
-    r = http.delete(f"{base}/v2/positions", params={"cancel_orders": "true"}, headers=h, timeout=TIMEOUT)
-    r.raise_for_status()
     syms = [p["symbol"] for p in pos.json()]
+    close_all(base, h, http, sleep)
     return f"CIERRE ({reason}): {len(syms)} posiciones cerradas y órdenes canceladas ({syms})"
+
+
+def _open(base: str, h: dict, http, what: str) -> list:
+    params = {"status": "open"} if what == "orders" else None
+    r = http.get(f"{base}/v2/{what}", params=params, headers=h, timeout=TIMEOUT)
+    r.raise_for_status()
+    return r.json()
+
+
+def close_all(base: str, h: dict, http, sleep=time.sleep, tries: int = 3) -> None:
+    """Cierra TODO de forma verificada.
+
+    Lección 2026-11-10: DELETE /v2/positions?cancel_orders=true canceló los stops/OCO pero la venta fue rechazada
+    (acciones aún retenidas por las órdenes en cancelación) y Alpaca responde 207 sin error HTTP → las posiciones
+    quedaron abiertas SIN stop. Ahora: 1) cancelar órdenes y esperar a que no quede ninguna abierta; 2) cerrar
+    posiciones; 3) verificar que no quede ninguna (reintenta); si quedan, error (sale en el log de Heroku).
+    """
+    for _ in range(tries):
+        http.delete(f"{base}/v2/orders", headers=h, timeout=TIMEOUT).raise_for_status()
+        for _ in range(20):
+            if not _open(base, h, http, "orders"):
+                break
+            sleep(0.5)
+        http.delete(f"{base}/v2/positions", headers=h, timeout=TIMEOUT).raise_for_status()
+        for _ in range(20):
+            if not _open(base, h, http, "positions"):
+                return
+            sleep(0.5)
+    left = [p["symbol"] for p in _open(base, h, http, "positions")]
+    raise RuntimeError(f"no se pudieron cerrar: {left}")
 
 
 if __name__ == "__main__":

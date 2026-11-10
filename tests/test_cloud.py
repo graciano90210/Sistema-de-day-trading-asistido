@@ -29,19 +29,35 @@ class Resp:
 
 
 class FakeHTTP:
-    def __init__(self, clock, positions, account=None):
-        self.clock, self.positions, self.calls = clock, positions, []
+    """Simula Alpaca. fail_closes = cuántos DELETE /v2/positions se 'rechazan' (207 sin error, caso 2026-11-10)."""
+
+    def __init__(self, clock, positions, account=None, fail_closes=0):
+        self.clock, self.positions, self.calls = clock, list(positions), []
         self.account = account or {"equity": "100000", "last_equity": "100000"}
+        self.orders = [{"symbol": p["symbol"]} for p in positions]
+        self.fail_closes = fail_closes
 
     def get(self, url, **kw):
         self.calls.append(("GET", url))
         if url.endswith("/v2/clock"):
             return Resp(self.clock)
-        return Resp(self.account if url.endswith("/v2/account") else self.positions)
+        if url.endswith("/v2/orders"):
+            return Resp(self.orders)
+        return Resp(self.account if url.endswith("/v2/account") else list(self.positions))
 
     def delete(self, url, **kw):
         self.calls.append(("DELETE", url, kw.get("params")))
+        if url.endswith("/v2/orders"):
+            self.orders = []
+        elif self.fail_closes > 0:
+            self.fail_closes -= 1
+        else:
+            self.positions = []
         return Resp([])
+
+
+def _deletes(http):
+    return [c for c in http.calls if c[0] == "DELETE"]
 
 
 def _now(hh, mm):
@@ -60,31 +76,45 @@ def test_closed_market_never_flattens():
 
 def test_flattens_in_window_with_positions_on_paper_only():
     http = FakeHTTP({"is_open": True, "next_close": CLOSE}, [{"symbol": "TTD"}, {"symbol": "IBRX"}])
-    out = job.run(ENV, http, _now(20, 51))
+    out = job.run(ENV, http, _now(20, 51), sleep=lambda s: None)
     assert out.startswith("CIERRE (cierre del día): 2")
-    deletes = [c for c in http.calls if c[0] == "DELETE"]
-    assert deletes == [("DELETE", "https://paper-api.alpaca.markets/v2/positions", {"cancel_orders": "true"})]
-    assert all(c[1].startswith("https://paper-api.alpaca.markets/") for c in http.calls)
+    base = "https://paper-api.alpaca.markets"
+    assert _deletes(http) == [("DELETE", f"{base}/v2/orders", None), ("DELETE", f"{base}/v2/positions", None)]
+    assert all(c[1].startswith(f"{base}/") for c in http.calls)
+    assert http.positions == []
+
+
+def test_rejected_close_is_retried_and_verified():
+    """Caso real 2026-11-10: se cancelan stops pero la venta se rechaza en silencio → reintentar hasta verificar."""
+    http = FakeHTTP({"is_open": True, "next_close": CLOSE}, [{"symbol": "GFL"}, {"symbol": "RKLB"}], fail_closes=1)
+    assert job.run(ENV, http, _now(20, 51), sleep=lambda s: None).startswith("CIERRE")
+    assert http.positions == []
+
+
+def test_close_that_never_works_raises():
+    http = FakeHTTP({"is_open": True, "next_close": CLOSE}, [{"symbol": "GFL"}], fail_closes=99)
+    with pytest.raises(RuntimeError, match="no se pudieron cerrar"):
+        job.run(ENV, http, _now(20, 51), sleep=lambda s: None)
 
 
 def test_no_positions_or_outside_window_does_nothing():
     http = FakeHTTP({"is_open": True, "next_close": CLOSE}, [])
-    assert "sin posiciones" in job.run(ENV, http, _now(20, 51))
+    assert "sin posiciones" in job.run(ENV, http, _now(20, 51), sleep=lambda s: None)
     http2 = FakeHTTP({"is_open": True, "next_close": CLOSE}, [{"symbol": "TTD"}])
-    assert "fuera de ventana" in job.run(ENV, http2, _now(19, 0))
+    assert "fuera de ventana" in job.run(ENV, http2, _now(19, 0), sleep=lambda s: None)
     assert not [c for c in http.calls + http2.calls if c[0] == "DELETE"]
 
 
 def test_switch_off_does_nothing():
     http = FakeHTTP({"is_open": True, "next_close": CLOSE}, [{"symbol": "TTD"}])
-    assert "desactivado" in job.run({**ENV, "DAYTRADER_AUTO_FLATTEN": "0"}, http, _now(20, 51))
+    assert "desactivado" in job.run({**ENV, "DAYTRADER_AUTO_FLATTEN": "0"}, http, _now(20, 51), sleep=lambda s: None)
     assert http.calls == []
 
 
 def test_live_url_aborts():
     http = FakeHTTP({"is_open": True, "next_close": CLOSE}, [{"symbol": "TTD"}])
     with pytest.raises(job.LiveTradingForbidden):
-        job.run({**ENV, "ALPACA_BASE_URL": "https://api.alpaca" + ".markets"}, http, _now(20, 51))
+        job.run({**ENV, "ALPACA_BASE_URL": "https://api.alpaca" + ".markets"}, http, _now(20, 51), sleep=lambda s: None)
     assert http.calls == []
 
 
@@ -92,7 +122,9 @@ def test_live_url_aborts():
 def test_profit_target_closes_everything_midday(pnl, closes):
     acct = {"equity": str(100_000 + pnl), "last_equity": "100000"}
     http = FakeHTTP({"is_open": True, "next_close": CLOSE}, [{"symbol": "TTD"}], acct)
-    out = job.run({**ENV, "DAYTRADER_PROFIT_TARGET": "60"}, http, _now(17, 30))  # 12:30 ET, lejos del cierre
+    out = job.run(
+        {**ENV, "DAYTRADER_PROFIT_TARGET": "60"}, http, _now(17, 30), sleep=lambda s: None
+    )  # 12:30 ET, lejos del cierre
     assert out.startswith("CIERRE (meta") is closes
     assert bool([c for c in http.calls if c[0] == "DELETE"]) is closes
 
@@ -100,9 +132,11 @@ def test_profit_target_closes_everything_midday(pnl, closes):
 def test_profit_target_ignored_when_market_closed_or_unset():
     acct = {"equity": "100100", "last_equity": "100000"}
     http = FakeHTTP({"is_open": False, "next_close": CLOSE}, [{"symbol": "TTD"}], acct)
-    assert "fuera de ventana" in job.run({**ENV, "DAYTRADER_PROFIT_TARGET": "60"}, http, _now(17, 30))
+    assert "fuera de ventana" in job.run(
+        {**ENV, "DAYTRADER_PROFIT_TARGET": "60"}, http, _now(17, 30), sleep=lambda s: None
+    )
     http2 = FakeHTTP({"is_open": True, "next_close": CLOSE}, [{"symbol": "TTD"}], acct)
-    assert "fuera de ventana" in job.run(ENV, http2, _now(17, 30))
+    assert "fuera de ventana" in job.run(ENV, http2, _now(17, 30), sleep=lambda s: None)
     assert not [c for c in http.calls + http2.calls if c[0] == "DELETE"]
 
 
@@ -110,6 +144,8 @@ def test_profit_target_ignored_when_market_closed_or_unset():
 def test_loss_limit_closes_everything(pnl, closes):
     acct = {"equity": str(100_000 + pnl), "last_equity": "100000"}
     http = FakeHTTP({"is_open": True, "next_close": CLOSE}, [{"symbol": "TTD"}], acct)
-    out = job.run({**ENV, "DAYTRADER_PROFIT_TARGET": "70", "DAYTRADER_LOSS_LIMIT": "70"}, http, _now(17, 30))
+    out = job.run(
+        {**ENV, "DAYTRADER_PROFIT_TARGET": "70", "DAYTRADER_LOSS_LIMIT": "70"}, http, _now(17, 30), sleep=lambda s: None
+    )
     assert out.startswith("CIERRE (pérdida") is closes
     assert bool([c for c in http.calls if c[0] == "DELETE"]) is closes
