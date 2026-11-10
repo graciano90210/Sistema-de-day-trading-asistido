@@ -742,8 +742,7 @@ def objetivo(
         journal.close()
         raise typer.Exit(1)
     d = 1 if pos["qty"] > 0 else -1
-    q = broker.quote(sym)
-    px = q["bid"] if d == 1 else q["ask"]
+    px, _q, src = broker.ref_price(sym, "short" if d == 1 else "long")  # precio de salida: bid (largo) / ask (corto)
     entry, stop, qty = pos["avg_entry"], info["stop"], abs(pos["qty"])
     if (precio - px) * d <= 0:
         console.print(f"[red]El objetivo debe estar {'por encima' if d == 1 else 'por debajo'} del precio actual "
@@ -753,7 +752,7 @@ def objetivo(
     risk = abs(entry - stop)
     tab = Table(title=f"OBJETIVO {sym} · CUENTA PAPER", show_header=False)
     for k, v in [("Posición", f"{'LARGO' if d == 1 else 'CORTO'} {qty:g} @ {entry:.2f}"),
-                 ("Precio actual", f"{px:.2f} ({'bid' if d == 1 else 'ask'} IEX)"),
+                 ("Precio actual", f"{px:.2f} ({src})"),
                  ("Stop (se mantiene)", f"{stop:.2f}"),
                  ("Objetivo nuevo", f"{precio:.2f}  → {(precio - entry) * d / risk:+.2f} R desde la entrada"),
                  ("Ganancia si lo toca", f"${(precio - entry) * d * qty:+,.2f}"),
