@@ -571,17 +571,15 @@ def trade(
 
         rcfg = _replace(rcfg, risk_per_trade=min(rcfg.risk_per_trade, max(riesgo, 0.0) / 100))  # nunca sube
         console.print(f"[dim]Riesgo de esta operación: {rcfg.risk_per_trade:.2%} del capital[/]")
-    q = broker.quote(symbol.upper())
-    ref = q["ask"] if side_n == "long" else q["bid"]
-    ref = ref or q["mid"]
-    console.print(f"[dim]Cotización IEX {symbol.upper()}: bid {q['bid']:.2f} · ask {q['ask']:.2f}[/]")
+    ref, q, src = broker.ref_price(symbol.upper(), side_n)
+    console.print(f"[dim]Cotización IEX {symbol.upper()}: bid {q['bid']:.2f} · ask {q['ask']:.2f} · "
+                  f"referencia {ref:.2f} ({src})[/]")  # fmt: skip
     acc = _acct(broker, journal, rcfg, today)
     t = build_ticket(symbol, side_n, ref, stop, target, acc, rcfg, now, "limit" if limit else "market", limit,
                      setup, catalyst, notes)  # fmt: skip
 
     def requote(sym):
-        qq = broker.quote(sym)
-        return (qq["ask"] if side_n == "long" else qq["bid"]) or qq["mid"]
+        return broker.ref_price(sym, side_n)[0]
 
     from datetime import UTC, datetime
 

@@ -11,7 +11,7 @@ from datetime import UTC, date, datetime, time
 
 from alpaca.data.enums import DataFeed
 from alpaca.data.historical import StockHistoricalDataClient
-from alpaca.data.requests import StockLatestQuoteRequest
+from alpaca.data.requests import StockLatestQuoteRequest, StockLatestTradeRequest
 from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import OrderClass, OrderSide, QueryOrderStatus, TimeInForce
 from alpaca.trading.requests import (
@@ -30,6 +30,20 @@ log = logging.getLogger(__name__)
 
 def _r2(x: float | None) -> float | None:
     return None if x is None else round(float(x), 2)
+
+
+MAX_IEX_SPREAD = 0.005  # > 0,5 %: IEX (un solo exchange) no refleja el mercado; se usa el último trade
+
+
+def spread_ok(q: dict, max_spread: float = MAX_IEX_SPREAD) -> bool:
+    bid, ask = q.get("bid") or 0, q.get("ask") or 0
+    return bid > 0 and ask > 0 and ask >= bid and (ask - bid) / ((ask + bid) / 2) <= max_spread
+
+
+def reference_price(q: dict, last: float | None, side: str) -> float:
+    if spread_ok(q) or not last:
+        return (q["ask"] if side == "long" else q["bid"]) or q["mid"]
+    return float(last)
 
 
 class PaperBroker:
@@ -56,6 +70,17 @@ class PaperBroker:
         bid, ask = float(q.bid_price or 0), float(q.ask_price or 0)
         mid = (bid + ask) / 2 if bid and ask else (ask or bid)
         return {"bid": bid, "ask": ask, "mid": mid, "ts": q.timestamp}
+
+    def last_trade(self, symbol: str) -> float | None:
+        t = self.data.get_stock_latest_trade(StockLatestTradeRequest(symbol_or_symbols=symbol, feed=DataFeed.IEX))
+        px = getattr(t.get(symbol), "price", None)
+        return float(px) if px else None
+
+    def ref_price(self, symbol: str, side: str) -> tuple[float, dict, str]:
+        """Precio de referencia robusto: ask (largo) / bid (corto); si el spread IEX es anormal, el último trade."""
+        q = self.quote(symbol)
+        last = self.last_trade(symbol) if not spread_ok(q) else None
+        return reference_price(q, last, side), q, ("último trade (spread IEX anormal)" if last else "cotización IEX")
 
     def positions(self) -> list[dict]:
         return [

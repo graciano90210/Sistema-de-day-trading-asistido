@@ -293,3 +293,14 @@ def test_kill_switch_in_dollars():
     assert check(t, replace(ACC, equity=99_930.01), SES, cfg, NOW).ok
     res = check(t, replace(ACC, equity=99_930), SES, cfg, NOW)
     assert not res.ok and any("KILL SWITCH" in x for x in res.reasons)
+
+
+def test_reference_price_ignores_abnormal_iex_spread():
+    from daytrader.execution.broker import reference_price, spread_ok
+
+    normal = {"bid": 41.44, "ask": 41.46, "mid": 41.45}
+    phantom = {"bid": 41.52, "ask": 42.86, "mid": 42.19}  # caso real GFL 2026-11-10
+    assert spread_ok(normal) and not spread_ok(phantom)
+    assert reference_price(normal, None, "long") == 41.46
+    assert reference_price(phantom, 41.50, "long") == 41.50
+    assert reference_price(phantom, None, "short") == 41.52  # sin último trade: se queda con la cotización
