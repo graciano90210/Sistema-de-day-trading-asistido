@@ -104,3 +104,12 @@ def test_profit_target_ignored_when_market_closed_or_unset():
     http2 = FakeHTTP({"is_open": True, "next_close": CLOSE}, [{"symbol": "TTD"}], acct)
     assert "fuera de ventana" in job.run(ENV, http2, _now(17, 30))
     assert not [c for c in http.calls + http2.calls if c[0] == "DELETE"]
+
+
+@pytest.mark.parametrize(("pnl", "closes"), [(-69.99, False), (-70.0, True), (-120.0, True), (30.0, False)])
+def test_loss_limit_closes_everything(pnl, closes):
+    acct = {"equity": str(100_000 + pnl), "last_equity": "100000"}
+    http = FakeHTTP({"is_open": True, "next_close": CLOSE}, [{"symbol": "TTD"}], acct)
+    out = job.run({**ENV, "DAYTRADER_PROFIT_TARGET": "70", "DAYTRADER_LOSS_LIMIT": "70"}, http, _now(17, 30))
+    assert out.startswith("CIERRE (pérdida") is closes
+    assert bool([c for c in http.calls if c[0] == "DELETE"]) is closes

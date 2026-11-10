@@ -8,6 +8,7 @@ Autorización PERMANENTE del usuario (2026-11-09, opción "a"); interruptor: Con
 - Actúa solo si el mercado está abierto y faltan <= WINDOW_MIN minutos para el cierre, y solo si hay posiciones.
 - Meta de ganancia diaria (autorizada 2026-11-09): si DAYTRADER_PROFIT_TARGET > 0 y el PnL del día de la cuenta
   (equity − last_equity, realizado + flotante) llega a la meta, cierra todo aunque falte para el cierre.
+- Pérdida máxima diaria (autorizada 2026-11-10): si DAYTRADER_LOSS_LIMIT > 0 y el PnL del día <= −límite, cierra todo.
 - Cancela órdenes abiertas y cierra posiciones (DELETE /v2/positions?cancel_orders=true). Idempotente.
 Keys (solo PAPER) en Config Vars: ALPACA_API_KEY, ALPACA_SECRET_KEY. Nunca en el código.
 """
@@ -59,7 +60,8 @@ def run(env: dict | None = None, http=requests, now: datetime | None = None) -> 
     ck = clock.json()
     in_window = should_flatten(ck, now)
     target = float(env.get("DAYTRADER_PROFIT_TARGET") or 0)
-    if not in_window and not (target > 0 and ck.get("is_open")):
+    loss = float(env.get("DAYTRADER_LOSS_LIMIT") or 0)
+    if not in_window and not ((target > 0 or loss > 0) and ck.get("is_open")):
         return f"fuera de ventana (próximo cierre {ck.get('next_close')})"
     pos = http.get(f"{base}/v2/positions", headers=h, timeout=TIMEOUT)
     pos.raise_for_status()
@@ -72,9 +74,12 @@ def run(env: dict | None = None, http=requests, now: datetime | None = None) -> 
         acct.raise_for_status()
         a = acct.json()
         pnl = float(a["equity"]) - float(a["last_equity"])
-        if pnl < target:
-            return f"PnL del día {pnl:+.2f} < meta {target:.2f}: sin cambios"
-        reason = f"meta de ganancia: PnL del día {pnl:+.2f} >= {target:.2f}"
+        if target > 0 and pnl >= target:
+            reason = f"meta de ganancia: PnL del día {pnl:+.2f} >= {target:.2f}"
+        elif loss > 0 and pnl <= -loss:
+            reason = f"pérdida máxima: PnL del día {pnl:+.2f} <= -{loss:.2f}"
+        else:
+            return f"PnL del día {pnl:+.2f} dentro de [-{loss:.2f}, +{target:.2f}]: sin cambios"
     r = http.delete(f"{base}/v2/positions", params={"cancel_orders": "true"}, headers=h, timeout=TIMEOUT)
     r.raise_for_status()
     syms = [p["symbol"] for p in pos.json()]
