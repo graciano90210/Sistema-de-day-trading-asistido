@@ -39,6 +39,7 @@ class RiskConfig:
     pdt_max_day_trades: int = 3
     small_margin_mult: float = 2.0
     enforce_pdt: bool = True  # False = práctica: se ignora el límite de day trades (tamaño y 2× se mantienen)
+    daily_loss_usd: float | None = None  # $: si se define, el kill switch usa este monto en vez de daily_loss_limit
     daily_profit_target: float | None = None  # $: al alcanzarlo se cierra todo y no hay más entradas ese día
 
 
@@ -169,8 +170,9 @@ def check(
         r.append(f"riesgo ${ticket.risk_usd:,.2f} > {cfg.risk_per_trade:.0%} del capital")
     # Kill switch diario (realizado + flotante)
     day_pnl = account.equity - account.last_equity
-    if day_pnl <= -cfg.daily_loss_limit * account.last_equity:
-        r.append(f"KILL SWITCH: PnL del día {day_pnl:,.2f} <= -{cfg.daily_loss_limit:.0%}")
+    floor = cfg.daily_loss_usd if cfg.daily_loss_usd else cfg.daily_loss_limit * account.last_equity
+    if day_pnl <= -floor:
+        r.append(f"KILL SWITCH: PnL del día {day_pnl:,.2f} <= -${floor:,.2f}")
     if cfg.daily_profit_target and day_pnl >= cfg.daily_profit_target:
         r.append(
             f"meta del día alcanzada: PnL {day_pnl:+,.2f} >= ${cfg.daily_profit_target:,.0f} (no más entradas hoy)"

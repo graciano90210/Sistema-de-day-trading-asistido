@@ -285,3 +285,11 @@ def test_daily_profit_target_blocks_new_entries():
     res = check(t, replace(ACC, equity=100_060), SES, cfg, NOW)
     assert not res.ok and any("meta del día" in x for x in res.reasons)
     assert check(ticket(), replace(ACC, equity=100_500), SES, CFG, NOW).ok  # sin meta configurada: no aplica
+
+
+def test_kill_switch_in_dollars():
+    cfg = replace(CFG, daily_loss_usd=70.0)
+    t = ticket(cfg=cfg)
+    assert check(t, replace(ACC, equity=99_930.01), SES, cfg, NOW).ok
+    res = check(t, replace(ACC, equity=99_930), SES, cfg, NOW)
+    assert not res.ok and any("KILL SWITCH" in x for x in res.reasons)

@@ -605,7 +605,9 @@ def positions() -> None:
             f"Regla PDT: {acc.day_trades_5d} / {rcfg.pdt_max_day_trades} day trades en las últimas 5 sesiones"
         )
     console.print(f"Capital{sim} ${acc.equity:,.2f} · PnL del día {pnl:+,.2f} ({pnl / acc.last_equity:+.2%}) · "
-                  f"trades hoy {acc.trades_today}/{rcfg.max_trades_per_day} · kill switch en {-rcfg.daily_loss_limit:.0%}")  # fmt: skip
+                  f"trades hoy {acc.trades_today}/{rcfg.max_trades_per_day} · kill switch en "
+                  f"{f'-${rcfg.daily_loss_usd:,.0f}' if rcfg.daily_loss_usd else f'{-rcfg.daily_loss_limit:.0%}'}"
+                  f"{f' · meta +${rcfg.daily_profit_target:,.0f}' if rcfg.daily_profit_target else ''}")  # fmt: skip
     for p in broker.positions():
         console.print(
             f"  {p['symbol']:6} {p['side']:5} {p['qty']:>8.0f} @ {p['avg_entry']:.2f}  PnL {p['unrealized_pl']:+,.2f}"

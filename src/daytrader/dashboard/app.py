@@ -171,7 +171,8 @@ def live_view() -> None:
     with st.container(horizontal=True):
         st.metric("Capital simulado" if rcfg.simulated_capital else "Capital paper", f"${eq:,.2f}", f"{pnl:+,.2f} hoy",
                   border=True, help="Tamaño real de práctica (config/risk.yaml)" if rcfg.simulated_capital else None)  # fmt: skip
-        st.metric("Hasta el kill switch (−3%)", f"${pnl + rcfg.daily_loss_limit * last:,.2f}", border=True,
+        floor = rcfg.daily_loss_usd or rcfg.daily_loss_limit * last
+        st.metric(f"Hasta el kill switch (−${floor:,.0f})", f"${pnl + floor:,.2f}", border=True,
                   help="Pérdida adicional del día antes de bloquear nuevas entradas")  # fmt: skip
         st.metric("Trades hoy", f"{sent_today} / 5", border=True)
         st.metric("Posiciones abiertas", f"{len(positions)} / 3", border=True)
