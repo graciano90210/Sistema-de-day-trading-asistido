@@ -49,3 +49,14 @@ def test_classify_sessions():
 def test_last_complete_session_excludes_today():
     # Lunes 2025-03-17 a las 15:00 ET → última sesión completa: viernes 14
     assert last_complete_session(datetime(2025, 3, 17, 19, 0)) == date(2025, 3, 14)
+
+
+def test_last_session_for_daily_includes_today_after_post_market():
+    """Bug 2026-11-11: a las 20:30 ET del día D la rutina nocturna debe bajar la barra diaria de D."""
+    from daytrader.market_calendar import last_session_for_daily
+
+    # Martes 2026-11-10 (horario de invierno, ET = UTC−5)
+    assert last_session_for_daily(datetime(2026, 11, 11, 1, 30)) == date(2026, 11, 10)  # 20:30 ET
+    assert last_session_for_daily(datetime(2026, 11, 11, 1, 5)) == date(2026, 11, 9)  # 20:05 ET: aún no
+    assert last_session_for_daily(datetime(2026, 11, 10, 20, 0)) == date(2026, 11, 9)  # 15:00 ET
+    assert last_session_for_daily(datetime(2026, 11, 14, 15, 0)) == date(2026, 11, 13)  # sábado

@@ -118,7 +118,8 @@ def make_bar_fetcher(
             symbol_or_symbols=symbol,
             timeframe=_TIMEFRAMES[timeframe],
             start=start_utc.replace(tzinfo=UTC),
-            end=end_utc.replace(tzinfo=UTC),
+            # nunca pedir los últimos 15 min (plan gratuito SIP): recortar el fin a ahora − 16 min
+            end=min(end_utc.replace(tzinfo=UTC), datetime.now(UTC) - timedelta(minutes=16)),
             feed=DataFeed(feed),
             adjustment=Adjustment(adjustment),
         )

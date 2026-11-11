@@ -15,7 +15,7 @@ from daytrader.config import Secrets, load_config, load_universe
 from daytrader.data.ingest import ingest as run_ingest
 from daytrader.data.ingest import month_chunks
 from daytrader.data.store import Store
-from daytrader.market_calendar import last_complete_session
+from daytrader.market_calendar import last_complete_session, last_session_for_daily
 
 app = typer.Typer(no_args_is_help=True, help="Sistema de day trading asistido (solo paper).")
 console = Console()
@@ -123,7 +123,7 @@ def universe(
     cfg, scfg = load_config(), load_yaml("scanner.yaml")["universe"]
     key, secret = Secrets().require_alpaca()
     d0 = date.fromisoformat(start) if start else cfg.data.history_start
-    d1 = date.fromisoformat(end) if end else (cfg.data.history_end or last_complete_session())
+    d1 = date.fromisoformat(end) if end else (cfg.data.history_end or last_session_for_daily())
     with Store(cfg.db_path, memory_limit=cfg.duckdb_memory_limit) as store:
         n = refresh_assets(store, fetch_assets(key, secret))
         syms = eligible_symbols(store, scfg["exchanges"], scfg["include_inactive"])
