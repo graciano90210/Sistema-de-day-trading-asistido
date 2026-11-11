@@ -15,11 +15,11 @@ confirm_timeout_s: 60         # la confirmación y/n caduca
 max_price_drift_r: 0.25       # se cancela si el precio se movió > 0,25 R entre el ticket y la confirmación
 
 # --- Práctica con el tamaño real (pedido del usuario, 2026-11-05) ---
-simulated_capital: 3000       # el sistema dimensiona como si la cuenta tuviera $3.000 (null = capital paper real)
-simulated_start: "2026-11-06" # desde esta fecha, el PnL realizado del journal se suma al capital simulado
-account_type: margin          # margen: permite cortos. Con < $25.000 aplica la regla PDT (abajo)
+simulated_capital: 1000       # semana de práctica desde 2026-11-12 (antes $3.000). $10/trade = 1 % (null = capital paper real)
+simulated_start: "2026-11-12" # desde esta fecha, el PnL realizado del journal se suma al capital simulado
+account_type: cash            # sin margen (< $2.000 en EE. UU.): solo largos, sin apalancamiento, sin regla PDT
 pdt_max_day_trades: 3         # máx. day trades en 5 sesiones con capital < $25.000 (FINRA; confirmar con el bróker)
 small_margin_mult: 2.0        # poder de compra 2× con capital < $25.000 (el 4× intradía exige ser PDT con $25.000)
 enforce_pdt: false            # PRÁCTICA (pedido del usuario 2026-11-05): sin límite PDT; con dinero real → true
-daily_profit_target: 70       # $ (autorizado 2026-11-09; 70 desde 2026-11-10): al llegar, guard/nube cierran todo y no hay más entradas hoy
-daily_loss_usd: 70            # $ (2026-11-10): kill switch simétrico con la meta; reemplaza al −3 % (sin nuevas entradas)
+daily_profit_target: 40       # $ (autorizado 2026-11-09; 40 desde 2026-11-12, semana con $1.000): al llegar, guard/nube cierran todo y no hay más entradas hoy
+daily_loss_usd: 40            # $ (2026-11-10; 40 desde 2026-11-12): kill switch simétrico con la meta; reemplaza al −3 % (sin nuevas entradas)
