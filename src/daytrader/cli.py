@@ -15,7 +15,7 @@ from daytrader.config import Secrets, load_config, load_universe
 from daytrader.data.ingest import ingest as run_ingest
 from daytrader.data.ingest import month_chunks
 from daytrader.data.store import Store
-from daytrader.market_calendar import last_complete_session, last_session_for_daily
+from daytrader.market_calendar import last_complete_session
 
 app = typer.Typer(no_args_is_help=True, help="Sistema de day trading asistido (solo paper).")
 console = Console()
@@ -123,7 +123,7 @@ def universe(
     cfg, scfg = load_config(), load_yaml("scanner.yaml")["universe"]
     key, secret = Secrets().require_alpaca()
     d0 = date.fromisoformat(start) if start else cfg.data.history_start
-    d1 = date.fromisoformat(end) if end else (cfg.data.history_end or last_session_for_daily())
+    d1 = date.fromisoformat(end) if end else (cfg.data.history_end or last_complete_session())
     with Store(cfg.db_path, memory_limit=cfg.duckdb_memory_limit) as store:
         n = refresh_assets(store, fetch_assets(key, secret))
         syms = eligible_symbols(store, scfg["exchanges"], scfg["include_inactive"])
@@ -1147,6 +1147,23 @@ def is_session_cmd() -> None:
     today = datetime.now(UTC).astimezone(ET).date()
     ok = is_session(today)
     console.print(f"{today}: {'hay sesión' if ok else 'sin sesión'}")
+    raise typer.Exit(0 if ok else 1)
+
+
+@app.command(name="data-fresh")
+def data_fresh_cmd() -> None:
+    """Código 0 si las barras diarias llegan a la última sesión completa; 1 si faltan (hay que correr universe).
+
+    Alpaca (plan gratuito) entrega la barra diaria de D recién después de la medianoche ET; ver nightly.sh.
+    """
+    import duckdb
+
+    cfg = load_config()
+    want = last_complete_session()
+    with duckdb.connect(str(cfg.db_path), read_only=True) as c:
+        have = c.sql("SELECT max(session_date) FROM bars_1d").fetchall()[0][0]
+    ok = have is not None and have >= want
+    console.print(f"diarias hasta {have} · última sesión completa {want}: {'al día' if ok else 'FALTAN'}")
     raise typer.Exit(0 if ok else 1)
 
 

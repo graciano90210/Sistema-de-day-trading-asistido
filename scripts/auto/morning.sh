@@ -8,12 +8,8 @@ LOG="reports/auto/morning_${D}.log"; mkdir -p reports/auto
 {
   echo "== morning $D $(date -Is)"
   "$UV" run daytrader is-session || { echo "sin sesión: nada que hacer"; exit 0; }
-  # Red de seguridad (2026-11-10): si la rutina nocturna de la sesión anterior no terminó, actualizar diarias ahora.
-  for i in 1 2 3; do P=$(date -d "$D -$i day" +%F); [ "$(date -d "$P" +%u)" -le 5 ] && break; done
-  if ! grep -q "código 0" "reports/auto/nightly_${P}.log" 2>/dev/null; then
-    echo "nightly ${P} incompleto: actualizo datos antes de la watchlist"
-    COLUMNS=120 "$UV" run daytrader ingest && COLUMNS=120 "$UV" run daytrader universe
-  fi
+  # Red de seguridad: si faltan las diarias de la sesión anterior (PC apagado, corte), actualizarlas antes.
+  "$UV" run daytrader data-fresh || { COLUMNS=120 "$UV" run daytrader ingest && COLUMNS=120 "$UV" run daytrader universe; }
   COLUMNS=140 "$UV" run daytrader watchlist --date "$D"
   echo "== fin $(date -Is) código $?"
 } >> "$LOG" 2>&1

@@ -80,21 +80,6 @@ def last_complete_session(now_utc: datetime | None = None) -> date:
     return s["session_date"].max()
 
 
-SIP_DELAY = timedelta(minutes=16)  # plan gratuito: no se pueden pedir datos SIP de los últimos 15 min
-
-
-def last_session_for_daily(now_utc: datetime | None = None) -> date:
-    """Última sesión cuya barra DIARIA ya se puede descargar: la de HOY si ya pasaron 20:00 ET + retraso SIP.
-
-    Bug 2026-11-11: la rutina nocturna (20:30 ET) usaba last_complete_session (siempre < hoy) y nunca bajaba
-    la sesión recién terminada → la watchlist de la mañana siguiente salía vacía (sin barra del día anterior).
-    """
-    now_utc = now_utc or datetime.now(UTC).replace(tzinfo=None)
-    now_et = now_utc.replace(tzinfo=UTC).astimezone(ET)
-    ready = datetime.combine(now_et.date(), POST_CLOSE_ET, tzinfo=ET) + SIP_DELAY
-    if is_session(now_et.date()) and now_et >= ready:
-        return now_et.date()
-    return last_complete_session(now_utc)
 
 
 def et_date_expr(col: str = "ts_utc") -> pl.Expr:

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Instala (o con --uninstall, quita) los temporizadores systemd de USUARIO de la rutina diaria.
-#   daytrader-nightly: lun–vie 20:30 ET → ingest + universe
+#   daytrader-nightly: mar–sáb 00:30 ET → ingest + universe (la diaria de D sale tras la medianoche ET)
 #   daytrader-morning: lun–vie 09:40 ET → watchlist del día (cutoff 09:25 ET)
 # Persistent=true: si el PC estaba apagado a esa hora, se ejecuta al encender. En festivos no hace nada.
 set -euo pipefail
@@ -18,7 +18,7 @@ fi
 mkdir -p "$UNIT_DIR"
 for job in nightly morning; do
   case $job in
-    nightly) when="Mon..Fri 20:30 America/New_York"; desc="actualiza datos de mercado" ;;
+    nightly) when="Tue..Sat 00:30 America/New_York"; desc="actualiza datos de mercado" ;;
     morning) when="Mon..Fri 09:40 America/New_York"; desc="genera la watchlist del día" ;;
   esac
   cat > "$UNIT_DIR/daytrader-$job.service" <<EOF
