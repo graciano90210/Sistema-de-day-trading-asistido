@@ -155,7 +155,7 @@ def make_multi_fetcher(
             symbol_or_symbols=list(symbols),
             timeframe=_TIMEFRAMES[timeframe],
             start=start_utc.replace(tzinfo=UTC),
-            end=end_utc.replace(tzinfo=UTC),
+            end=min(end_utc.replace(tzinfo=UTC), datetime.now(UTC) - timedelta(minutes=16)),  # plan gratuito SIP
             feed=DataFeed(feed),
             adjustment=Adjustment(adjustment),
         )
