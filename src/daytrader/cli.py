@@ -943,9 +943,11 @@ def mediodia(
     acc = from_broker(broker, Journal(cfg.db_path.parent / "journal.duckdb"), rcfg, today)
     elapsed = max(0.0, (until - open_utc).total_seconds() / (close_utc - open_utc).total_seconds())
 
+    from daytrader.execution.broker import live_reference, spread_ok
+
     def ctx_for(x):
-        q = broker.quote(x)
-        price = q["mid"] or q["ask"] or q["bid"]
+        q = broker.quote(x)  # precio real robusto: con spread IEX fantasma, el último trade (caso VIK 2026-11-17)
+        price, _ = live_reference(q, None if spread_ok(q) else broker.last_trade(x))
         return compute(x, bars.filter(pl.col("symbol") == x), daily.filter(pl.col("symbol") == x), price, open_utc), q
 
     rel = {}
@@ -1193,7 +1195,7 @@ def contexto(
 
     from daytrader.data.alpaca_client import make_multi_fetcher
     from daytrader.execution.broker import PaperBroker
-    from daytrader.execution.context import candidate_stops, compute, readings
+    from daytrader.execution.context import candidate_stops, compute, delay_warnings, readings
     from daytrader.market_calendar import ET, et_to_utc_naive, sessions
 
     key, secret = Secrets().require_alpaca()
@@ -1215,9 +1217,11 @@ def contexto(
         pl.col("ts_utc").dt.replace_time_zone("UTC").dt.convert_time_zone("America/New_York").dt.date().alias("session_date"))  # fmt: skip
     broker = PaperBroker(key, secret)
 
+    live_src: dict[str, str] = {}
+
     def ctx_for(x):
-        q = broker.quote(x)
-        price = q["mid"] or q["ask"] or q["bid"]
+        price, src = broker.live_price(x)
+        live_src[x] = src
         return compute(x, bars.filter(pl.col("symbol") == x), daily.filter(pl.col("session_date") < today)
                        .filter(pl.col("symbol") == x), price, open_utc)  # fmt: skip
 
@@ -1228,7 +1232,10 @@ def contexto(
             c.rel[r] = ((rc.price / rc.prev_close - 1) * 100, rc.price > rc.vwap)
     tab = Table(title=f"Contexto {sym} · {datetime.now(UTC).astimezone(ET):%H:%M} ET", show_header=False)
     f = lambda v: "—" if v is None else f"{v:,.2f}"  # noqa: E731
-    for k, v in [("Precio actual (IEX)", f(c.price)), ("Cierre de ayer", f(c.prev_close)), ("VWAP del día", f(c.vwap)),
+    sip_hhmm = c.bars_until.replace(tzinfo=UTC).astimezone(ET).strftime("%H:%M") if c.bars_until else "—"
+    for k, v in [("Precio actual (tiempo real)", f"{f(c.price)} ({live_src.get(sym, '')})"),
+                 (f"Último precio con barras SIP ({sip_hhmm} ET)", f(c.last_bar_close)),
+                 ("Cierre de ayer", f(c.prev_close)), ("VWAP del día", f(c.vwap)),
                  ("Pre-market máx / mín", f"{f(c.pm_high)} / {f(c.pm_low)}"),
                  ("Rango apertura 5 min", f"{f(c.or_low)} – {f(c.or_high)}"), ("Máx / mín del día", f"{f(c.day_high)} / {f(c.day_low)}"),
                  ("ATR 14 días", f"{f(c.atr14)} ({c.atr14 / c.price:.1%} del precio)" if c.atr14 else "—")]:  # fmt: skip
@@ -1238,6 +1245,8 @@ def contexto(
         console.print(
             f"[dim]Barras SIP hasta {c.bars_until.replace(tzinfo=UTC).astimezone(ET):%H:%M} ET (retraso de 15 min del plan gratuito)[/]"
         )
+    for w in delay_warnings(c):
+        console.print(f"[bold yellow]⚠ {w}[/]")
     rd = readings(c)
     console.print("\n[bold]Lecturas[/] (descriptivas, no señales probadas):")
     for text, lean in rd:

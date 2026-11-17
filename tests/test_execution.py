@@ -327,3 +327,24 @@ def test_sync_looks_back_for_overnight_positions():
 
     sync.sync_day(B(), J(), date(2026, 11, 11))
     assert seen["day"] <= date(2026, 11, 10)
+
+
+def test_live_reference_uses_last_trade_when_iex_spread_is_phantom():
+    from daytrader.execution.broker import live_reference
+
+    assert live_reference({"bid": 100.0, "ask": 100.1, "mid": 100.05}, None) == (100.05, "cotización IEX")
+    px, src = live_reference({"bid": 90.51, "ask": 94.6, "mid": 92.555}, 90.69)  # VIK 2026-11-17
+    assert px == 90.69 and "último trade" in src
+
+
+def test_delay_warnings_flag_move_and_vwap_cross():
+    """VIK 2026-11-17: barras SIP en 92.56 sobre el VWAP 90.74; precio real 90.69 → debajo del VWAP."""
+    from daytrader.execution.context import Context, delay_warnings
+
+    base = dict(symbol="VIK", prev_close=90.28, atr14=3.32, pm_high=91.43, pm_low=85.43, or_high=93.28,
+                or_low=87.10, day_high=93.60, day_low=87.10, vwap=90.74, price_30m_ago=89.9, bars_until=None)
+    w = delay_warnings(Context(price=90.69, last_bar_close=92.56, **base))
+    assert any("se movió -1.87" in x for x in w)
+    assert any("VWAP" in x and "DEBAJO" in x for x in w)
+    assert any("máximo del pre-market" in x for x in w)
+    assert delay_warnings(Context(price=92.60, last_bar_close=92.56, **base)) == []

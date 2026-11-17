@@ -46,6 +46,13 @@ def reference_price(q: dict, last: float | None, side: str) -> float:
     return float(last)
 
 
+def live_reference(q: dict, last: float | None) -> tuple[float, str]:
+    """Precio actual neutral: punto medio IEX si el spread es normal; si no, el último trade."""
+    if spread_ok(q) or not last:
+        return (q["mid"] or q["ask"] or q["bid"]), "cotización IEX"
+    return float(last), "último trade IEX (spread anormal)"
+
+
 class PaperBroker:
     def __init__(self, api_key: str, secret_key: str):
         self.client = TradingClient(api_key, secret_key, paper=True)
@@ -81,6 +88,10 @@ class PaperBroker:
         q = self.quote(symbol)
         last = self.last_trade(symbol) if not spread_ok(q) else None
         return reference_price(q, last, side), q, ("último trade (spread IEX anormal)" if last else "cotización IEX")
+
+    def live_price(self, symbol: str) -> tuple[float, str]:
+        q = self.quote(symbol)
+        return live_reference(q, None if spread_ok(q) else self.last_trade(symbol))
 
     def positions(self) -> list[dict]:
         return [

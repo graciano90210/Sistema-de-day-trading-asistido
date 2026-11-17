@@ -29,6 +29,7 @@ class Context:
     price_30m_ago: float | None
     bars_until: datetime | None
     rel: dict = field(default_factory=dict)  # SPY/QQQ: cambio del día y posición vs su VWAP
+    last_bar_close: float | None = None  # cierre de la última barra SIP (≈15 min de retraso)
 
 
 def _vwap(rth: pl.DataFrame) -> float | None:
@@ -52,6 +53,7 @@ def compute(symbol: str, bars: pl.DataFrame, daily: pl.DataFrame, price: float, 
         ).to_series()
         atr = float(tr.tail(14).mean())
     last_ts = rth["ts_utc"].max() if not rth.is_empty() else None
+    last_close = float(bars.sort("ts_utc")["close"][-1]) if not bars.is_empty() else None
     ago = None
     if last_ts is not None:
         old = rth.filter(pl.col("ts_utc") <= last_ts - timedelta(minutes=30))
@@ -65,6 +67,7 @@ def compute(symbol: str, bars: pl.DataFrame, daily: pl.DataFrame, price: float, 
         day_high=float(rth["high"].max()) if not rth.is_empty() else None,
         day_low=float(rth["low"].min()) if not rth.is_empty() else None,
         vwap=_vwap(rth), price_30m_ago=ago, bars_until=(last_ts + timedelta(minutes=1)) if last_ts else None,
+        last_bar_close=last_close,
     )  # fmt: skip
 
 
@@ -99,6 +102,29 @@ def readings(c: Context) -> list[tuple[str, int]]:
     for name, (ch, above) in c.rel.items():
         out.append((f"{name} {ch:+.2f}% hoy y {'sobre' if above else 'bajo'} su VWAP: mercado "
                     f"{'a favor del largo' if above else 'a favor del corto'}", 1 if above else -1))  # fmt: skip
+    return out
+
+
+def delay_warnings(c: Context) -> list[str]:
+    """Avisos cuando el precio REAL se alejó de la última barra SIP (plan gratuito: ~15 min sin barras).
+
+    Caso 2026-11-16/17 (COIN, VIK): las barras mostraban la acción sobre el VWAP y subiendo, pero en los
+    15 min sin barras ya había caído y perdido el VWAP. Las lecturas usan el precio real; esto lo hace visible.
+    """
+    last, p = c.last_bar_close, c.price
+    if not last or not p:
+        return []
+    out = []
+    move = p - last
+    thr = max(0.005 * last, 0.15 * c.atr14 if c.atr14 else 0.0)
+    if abs(move) >= thr:
+        out.append(f"En los ~15 min sin barras el precio real se movió {move:+.2f} ({move / last:+.2%}): "
+                   f"de {last:.2f} a {p:.2f}")  # fmt: skip
+    levels = {"el VWAP": c.vwap, "el máximo del pre-market": c.pm_high, "el mínimo del pre-market": c.pm_low,
+              "el máximo del rango de apertura": c.or_high, "el mínimo del rango de apertura": c.or_low}  # fmt: skip
+    for name, lv in levels.items():
+        if lv and (last - lv) * (p - lv) < 0:
+            out.append(f"Ya cruzó {name} ({lv:.2f}): ahora está {'ENCIMA' if p > lv else 'DEBAJO'}")
     return out
 
 
