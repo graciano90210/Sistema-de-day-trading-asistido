@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from daytrader.execution.context import Context, readings
+from daytrader.execution.context import EXTENDED_ATR, Context, day_extension, readings
 
 
 @dataclass
@@ -54,6 +54,9 @@ def evaluate(c: Context, gap_am: float | None, catalyst: str | None, avg_volume:
         notes.append(f"spread amplio ({spread:.2%})")
     if rvol is not None and rvol < 1:
         notes.append("volumen por debajo de lo normal: se enfrió")
+    ext = day_extension(c)
+    if ext is not None and ext >= EXTENDED_ATR:
+        notes.append(f"ya recorrió {ext:.1f}× su ATR: quizá llegas tarde")
     lean = "largo" if up - dn >= 2 else "corto" if dn - up >= 2 else "mixto"
     if lean == "corto" and not allow_short:
         notes.append("se inclina a corto pero tu cuenta no permite cortos")

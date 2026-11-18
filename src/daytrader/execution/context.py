@@ -105,6 +105,26 @@ def readings(c: Context) -> list[tuple[str, int]]:
     return out
 
 
+EXTENDED_ATR = 1.5  # práctica (revisión 2026-11-18), NO probado con historia
+
+
+def day_extension(c: Context) -> float | None:
+    """Recorrido de hoy (incluido el gap desde el cierre de ayer y el precio real) en múltiplos del ATR 14."""
+    if not c.atr14:
+        return None
+    pts = [x for x in (c.prev_close, c.day_high, c.day_low, c.price) if x]
+    return (max(pts) - min(pts)) / c.atr14 if len(pts) >= 2 else None
+
+
+def extension_warning(c: Context, limit: float = EXTENDED_ATR) -> str | None:
+    """Revisión 2026-11-18: DLO y TJX entraron tras un recorrido grande y casi no se movieron a favor."""
+    x = day_extension(c)
+    if x is None or x < limit:
+        return None
+    return (f"Ya recorrió hoy {x:.1f}× su movimiento diario normal (ATR {c.atr14:.2f}): "
+            f"probablemente llegas tarde al movimiento")  # fmt: skip
+
+
 def delay_warnings(c: Context) -> list[str]:
     """Avisos cuando el precio REAL se alejó de la última barra SIP (plan gratuito: ~15 min sin barras).
 

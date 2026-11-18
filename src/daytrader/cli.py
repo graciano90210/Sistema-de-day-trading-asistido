@@ -1195,7 +1195,7 @@ def contexto(
 
     from daytrader.data.alpaca_client import make_multi_fetcher
     from daytrader.execution.broker import PaperBroker
-    from daytrader.execution.context import candidate_stops, compute, delay_warnings, readings
+    from daytrader.execution.context import candidate_stops, compute, delay_warnings, extension_warning, readings
     from daytrader.market_calendar import ET, et_to_utc_naive, sessions
 
     key, secret = Secrets().require_alpaca()
@@ -1245,8 +1245,9 @@ def contexto(
         console.print(
             f"[dim]Barras SIP hasta {c.bars_until.replace(tzinfo=UTC).astimezone(ET):%H:%M} ET (retraso de 15 min del plan gratuito)[/]"
         )
-    for w in delay_warnings(c):
-        console.print(f"[bold yellow]⚠ {w}[/]")
+    for w in [*delay_warnings(c), extension_warning(c)]:
+        if w:
+            console.print(f"[bold yellow]⚠ {w}[/]")
     rd = readings(c)
     console.print("\n[bold]Lecturas[/] (descriptivas, no señales probadas):")
     for text, lean in rd:

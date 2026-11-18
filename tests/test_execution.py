@@ -348,3 +348,19 @@ def test_delay_warnings_flag_move_and_vwap_cross():
     assert any("VWAP" in x and "DEBAJO" in x for x in w)
     assert any("máximo del pre-market" in x for x in w)
     assert delay_warnings(Context(price=92.60, last_bar_close=92.56, **base)) == []
+
+
+def test_extension_warning_flags_late_entries_from_review():
+    """Revisión 2026-11-18: TJX (2026-11-18) y DLO (2026-11-17) entraron tarde; APH (2026-11-12) no."""
+    from daytrader.execution.context import Context, day_extension, extension_warning
+
+    def ctx(price, prev, hi, lo, atr):
+        return Context(symbol="X", price=price, prev_close=prev, atr14=atr, pm_high=None, pm_low=None, or_high=None,
+                       or_low=None, day_high=hi, day_low=lo, vwap=None, price_30m_ago=None, bars_until=None)
+
+    tjx = ctx(143.45, 129.85, 143.14, 134.05, 4.08)
+    dlo = ctx(12.42, 13.34, 12.88, 12.31, 0.60)
+    aph = ctx(79.38, 79.31, 80.95, 76.15, 4.66)
+    assert day_extension(tjx) > 3 and "llegas tarde" in extension_warning(tjx)
+    assert extension_warning(dlo) is not None
+    assert extension_warning(aph) is None
