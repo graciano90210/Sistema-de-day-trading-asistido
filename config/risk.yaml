@@ -15,8 +15,8 @@ confirm_timeout_s: 60         # la confirmación y/n caduca
 max_price_drift_r: 0.25       # se cancela si el precio se movió > 0,25 R entre el ticket y la confirmación
 
 # --- Práctica con el tamaño real (pedido del usuario, 2026-11-05) ---
-simulated_capital: 2000       # bloque 2 desde 2026-11-18: $2.000 con margen y cortos ($20/trade = 1 %). Antes: $1.000 cash (11-12..11-17)
-simulated_start: "2026-11-18" # desde esta fecha, el PnL realizado del journal se suma al capital simulado
+simulated_capital: 2000       # bloque 2 desde 2026-11-17 (primera operación: DLO corto): $2.000 con margen y cortos ($20/trade = 1 %). Antes: $1.000 cash (11-12..11-17)
+simulated_start: "2026-11-17" # desde esta fecha, el PnL realizado del journal se suma al capital simulado
 account_type: margin          # margen (mín. $2.000 en EE. UU.): permite cortos; con < $25.000 aplica la regla PDT
 pdt_max_day_trades: 3         # máx. day trades en 5 sesiones con capital < $25.000 (FINRA; confirmar con el bróker)
 small_margin_mult: 2.0        # poder de compra 2× con capital < $25.000 (el 4× intradía exige ser PDT con $25.000)
